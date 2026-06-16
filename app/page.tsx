@@ -4,6 +4,7 @@ import ProblemSection from '@/components/ProblemSection'
 import IdentityLayer from '@/components/IdentityLayer'
 import HowItWorks from '@/components/HowItWorks'
 import DemoSection from '@/components/DemoSection'
+import MeetYouraSection from '@/components/MeetYouraSection'
 import FutureSection from '@/components/FutureSection'
 import WaitlistSection from '@/components/WaitlistSection'
 import Footer from '@/components/Footer'
@@ -17,6 +18,7 @@ export default function Home() {
       <IdentityLayer />
       <HowItWorks />
       <DemoSection />
+      <MeetYouraSection />
       <FutureSection />
       <WaitlistSection />
       <Footer />
