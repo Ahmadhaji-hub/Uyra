@@ -4,7 +4,7 @@ import { motion, useInView } from 'framer-motion'
 import { useRef, useState } from 'react'
 import { supabase, isSupabaseConfigured } from '@/lib/supabase'
 
-type Status = 'idle' | 'loading' | 'success' | 'duplicate' | 'invalid' | 'error'
+type Status = 'idle' | 'loading' | 'success' | 'duplicate' | 'invalid' | 'error' | 'misconfigured'
 
 function validateEmail(email: string): boolean {
   return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
@@ -14,6 +14,7 @@ const errorMessages: Record<string, string> = {
   duplicate: 'This email is already on the waitlist.',
   invalid: 'Please enter a valid email address.',
   error: 'Something went wrong. Please try again.',
+  misconfigured: 'Service unavailable. Please try again later.',
 }
 
 export default function WaitlistSection() {
@@ -32,38 +33,39 @@ export default function WaitlistSection() {
       return
     }
 
+    if (!isSupabaseConfigured || !supabase) {
+      setStatus('misconfigured')
+      return
+    }
+
     setStatus('loading')
 
-    if (!isSupabaseConfigured) {
+    try {
+      const { error } = await supabase
+        .from('waitlist')
+        .insert([{ email: trimmed }])
+
+      if (!error) {
+        setStatus('success')
+        return
+      }
+
+      if (error.code === '23505') {
+        setStatus('duplicate')
+        return
+      }
+
       setStatus('error')
-      return
+    } catch {
+      setStatus('error')
     }
-
-    const { error } = await supabase
-      .from('waitlist')
-      .insert([{ email: trimmed }])
-
-    if (!error) {
-      setStatus('success')
-      return
-    }
-
-    // Postgres unique constraint violation = duplicate
-    if (error.code === '23505') {
-      setStatus('duplicate')
-      return
-    }
-
-    setStatus('error')
   }
 
-  const isError = status === 'duplicate' || status === 'invalid' || status === 'error'
+  const isError = ['duplicate', 'invalid', 'error', 'misconfigured'].includes(status)
 
   return (
     <section id="waitlist" ref={ref} className="relative py-40 px-6 overflow-hidden">
       <div className="section-line absolute top-0 left-0 right-0" />
-
-      {/* Background */}
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_50%,rgba(100,80,200,0.06)_0%,transparent_70%)]" />
 
       <div className="max-w-3xl mx-auto text-center">
@@ -99,7 +101,6 @@ export default function WaitlistSection() {
           the future of personal AI. Spots are limited.
         </motion.p>
 
-        {/* Form */}
         <motion.div
           initial={{ opacity: 0, y: 20 }}
           animate={inView ? { opacity: 1, y: 0 } : {}}
@@ -147,7 +148,6 @@ export default function WaitlistSection() {
                 </button>
               </form>
 
-              {/* Error message */}
               {isError && (
                 <motion.p
                   className="mt-3 text-sm text-red-400/80"
