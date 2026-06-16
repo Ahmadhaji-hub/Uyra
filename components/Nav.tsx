@@ -4,8 +4,8 @@ import { motion, useScroll, useTransform } from 'framer-motion'
 
 export default function Nav() {
   const { scrollY } = useScroll()
-  const borderOpacity = useTransform(scrollY, [0, 80], [0, 1])
   const bgOpacity = useTransform(scrollY, [0, 80], [0, 0.85])
+  const borderOpacity = useTransform(scrollY, [0, 80], [0, 0.06])
 
   return (
     <motion.header
@@ -21,7 +21,7 @@ export default function Nav() {
       />
       <motion.div
         className="absolute bottom-0 left-0 right-0 h-px bg-white"
-        style={{ opacity: useTransform(scrollY, [0, 80], [0, 0.06]) }}
+        style={{ opacity: borderOpacity }}
       />
       <div className="relative max-w-7xl mx-auto flex items-center justify-between h-16 md:h-20">
         <motion.a
