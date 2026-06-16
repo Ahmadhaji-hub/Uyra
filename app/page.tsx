@@ -6,6 +6,7 @@ import HowItWorks from '@/components/HowItWorks'
 import DemoSection from '@/components/DemoSection'
 import MeetYouraSection from '@/components/MeetYouraSection'
 import FutureSection from '@/components/FutureSection'
+import WhyNowSection from '@/components/WhyNowSection'
 import WaitlistSection from '@/components/WaitlistSection'
 import Footer from '@/components/Footer'
 
@@ -20,6 +21,7 @@ export default function Home() {
       <DemoSection />
       <MeetYouraSection />
       <FutureSection />
+      <WhyNowSection />
       <WaitlistSection />
       <Footer />
     </main>
