@@ -2,22 +2,62 @@
 
 import { motion, useInView } from 'framer-motion'
 import { useRef, useState } from 'react'
+import { supabase, isSupabaseConfigured } from '@/lib/supabase'
+
+type Status = 'idle' | 'loading' | 'success' | 'duplicate' | 'invalid' | 'error'
+
+function validateEmail(email: string): boolean {
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())
+}
+
+const errorMessages: Record<string, string> = {
+  duplicate: 'This email is already on the waitlist.',
+  invalid: 'Please enter a valid email address.',
+  error: 'Something went wrong. Please try again.',
+}
 
 export default function WaitlistSection() {
   const ref = useRef(null)
   const inView = useInView(ref, { once: true, margin: '-10%' })
   const [email, setEmail] = useState('')
-  const [submitted, setSubmitted] = useState(false)
-  const [loading, setLoading] = useState(false)
+  const [status, setStatus] = useState<Status>('idle')
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!email || !email.includes('@')) return
-    setLoading(true)
-    await new Promise((r) => setTimeout(r, 800))
-    setLoading(false)
-    setSubmitted(true)
+
+    const trimmed = email.trim()
+
+    if (!validateEmail(trimmed)) {
+      setStatus('invalid')
+      return
+    }
+
+    setStatus('loading')
+
+    if (!isSupabaseConfigured) {
+      setStatus('error')
+      return
+    }
+
+    const { error } = await supabase
+      .from('waitlist')
+      .insert([{ email: trimmed }])
+
+    if (!error) {
+      setStatus('success')
+      return
+    }
+
+    // Postgres unique constraint violation = duplicate
+    if (error.code === '23505') {
+      setStatus('duplicate')
+      return
+    }
+
+    setStatus('error')
   }
+
+  const isError = status === 'duplicate' || status === 'invalid' || status === 'error'
 
   return (
     <section id="waitlist" ref={ref} className="relative py-40 px-6 overflow-hidden">
@@ -65,25 +105,7 @@ export default function WaitlistSection() {
           animate={inView ? { opacity: 1, y: 0 } : {}}
           transition={{ duration: 0.7, delay: 0.35, ease: [0.16, 1, 0.3, 1] }}
         >
-          {!submitted ? (
-            <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-3 max-w-md mx-auto">
-              <input
-                type="email"
-                value={email}
-                onChange={(e) => setEmail(e.target.value)}
-                placeholder="your@email.com"
-                required
-                className="flex-1 px-5 py-3.5 rounded-full bg-white/4 border border-white/8 text-[#f8f8f8] placeholder-[#3a3a3a] text-sm outline-none focus:border-white/20 focus:bg-white/6 transition-all duration-200"
-              />
-              <button
-                type="submit"
-                disabled={loading}
-                className="px-7 py-3.5 rounded-full bg-[#f8f8f8] text-[#050505] text-sm font-medium tracking-tight hover:bg-white transition-all duration-200 hover:scale-[1.02] hover:shadow-[0_0_30px_rgba(248,248,248,0.12)] disabled:opacity-60 disabled:cursor-not-allowed whitespace-nowrap"
-              >
-                {loading ? 'Joining...' : 'Join Waitlist'}
-              </button>
-            </form>
-          ) : (
+          {status === 'success' ? (
             <motion.div
               className="flex flex-col items-center gap-4"
               initial={{ opacity: 0, scale: 0.95 }}
@@ -92,17 +114,56 @@ export default function WaitlistSection() {
             >
               <div className="w-12 h-12 rounded-full border border-white/10 bg-white/4 flex items-center justify-center">
                 <svg width="20" height="20" viewBox="0 0 20 20" fill="none">
-                  <path d="M4 10L8.5 14.5L16 6" stroke="#9b8fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                  <path d="M4 10L8.5 14.5L16 6" stroke="#9b8fff" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               </div>
-              <p className="text-[#f8f8f8] text-lg font-medium">You're on the list.</p>
+              <p className="text-[#f8f8f8] text-lg font-medium">You're on the waitlist.</p>
               <p className="text-[#555] text-sm">We'll reach out when your Digital Self is ready.</p>
             </motion.div>
-          )}
+          ) : (
+            <>
+              <form onSubmit={handleSubmit} className="flex flex-col sm:flex-row gap-3 max-w-md mx-auto">
+                <input
+                  type="email"
+                  value={email}
+                  onChange={(e) => {
+                    setEmail(e.target.value)
+                    if (isError) setStatus('idle')
+                  }}
+                  placeholder="your@email.com"
+                  required
+                  className={`flex-1 px-5 py-3.5 rounded-full bg-white/4 border text-[#f8f8f8] placeholder-[#3a3a3a] text-sm outline-none transition-all duration-200
+                    ${isError
+                      ? 'border-red-500/40 focus:border-red-500/60'
+                      : 'border-white/8 focus:border-white/20 focus:bg-white/6'
+                    }`}
+                />
+                <button
+                  type="submit"
+                  disabled={status === 'loading'}
+                  className="px-7 py-3.5 rounded-full bg-[#f8f8f8] text-[#050505] text-sm font-medium tracking-tight hover:bg-white transition-all duration-200 hover:scale-[1.02] hover:shadow-[0_0_30px_rgba(248,248,248,0.12)] disabled:opacity-60 disabled:cursor-not-allowed whitespace-nowrap"
+                >
+                  {status === 'loading' ? 'Joining...' : 'Join Waitlist'}
+                </button>
+              </form>
 
-          <p className="text-[#3a3a3a] text-xs mt-5 tracking-wide">
-            No spam. No noise. Just Uyra.
-          </p>
+              {/* Error message */}
+              {isError && (
+                <motion.p
+                  className="mt-3 text-sm text-red-400/80"
+                  initial={{ opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3 }}
+                >
+                  {errorMessages[status]}
+                </motion.p>
+              )}
+
+              <p className="text-[#3a3a3a] text-xs mt-5 tracking-wide">
+                No spam. No noise. Just Uyra.
+              </p>
+            </>
+          )}
         </motion.div>
       </div>
     </section>
