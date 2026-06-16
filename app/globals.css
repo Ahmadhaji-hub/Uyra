@@ -95,6 +95,19 @@ body::before {
   background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
 }
 
+/* Fix browser autofill turning input white */
+input:-webkit-autofill,
+input:-webkit-autofill:hover,
+input:-webkit-autofill:focus {
+  -webkit-box-shadow: 0 0 0px 1000px #111111 inset !important;
+  -webkit-text-fill-color: #f8f8f8 !important;
+  caret-color: #f8f8f8;
+}
+
+input::placeholder {
+  color: #3a3a3a;
+}
+
 @layer utilities {
   .text-balance {
     text-wrap: balance;

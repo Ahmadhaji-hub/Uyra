@@ -133,11 +133,16 @@ export default function WaitlistSection() {
                   }}
                   placeholder="your@email.com"
                   required
-                  className={`flex-1 px-5 py-3.5 rounded-full bg-white/4 border text-[#f8f8f8] placeholder-[#3a3a3a] text-sm outline-none transition-all duration-200
+                  className={`flex-1 px-5 py-3.5 rounded-full border text-base outline-none transition-all duration-200 appearance-none
                     ${isError
                       ? 'border-red-500/40 focus:border-red-500/60'
-                      : 'border-white/8 focus:border-white/20 focus:bg-white/6'
+                      : 'border-white/15 focus:border-white/30'
                     }`}
+                  style={{
+                    background: '#111111',
+                    color: '#f8f8f8',
+                    WebkitTextFillColor: '#f8f8f8',
+                  }}
                 />
                 <button
                   type="submit"
