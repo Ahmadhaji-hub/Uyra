@@ -45,7 +45,7 @@ export default function DemoSection() {
   return (
     <section ref={ref} className="relative py-40 px-6 overflow-hidden">
       <div className="section-line absolute top-0 left-0 right-0" />
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_60%_60%_at_50%_50%,rgba(80,60,180,0.03)_0%,transparent_70%)]" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_60%_60%_at_50%_50%,rgba(80,60,180,0.03)_0%,transparent_70%)] pointer-events-none" />
 
       <div className="max-w-6xl mx-auto">
         <div className="grid md:grid-cols-2 gap-16 md:gap-24 items-start">

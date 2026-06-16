@@ -66,7 +66,7 @@ export default function WaitlistSection() {
   return (
     <section id="waitlist" ref={ref} className="relative py-40 px-6 overflow-hidden">
       <div className="section-line absolute top-0 left-0 right-0" />
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_50%,rgba(100,80,200,0.06)_0%,transparent_70%)]" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_50%,rgba(100,80,200,0.06)_0%,transparent_70%)] pointer-events-none" />
 
       <div className="max-w-3xl mx-auto text-center">
         <motion.p

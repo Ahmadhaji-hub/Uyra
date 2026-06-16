@@ -21,7 +21,7 @@ export default function ProblemSection() {
       <div className="section-line mb-0 absolute top-0 left-0 right-0" />
 
       {/* Background */}
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_60%_50%_at_50%_50%,rgba(255,255,255,0.015)_0%,transparent_70%)]" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_60%_50%_at_50%_50%,rgba(255,255,255,0.015)_0%,transparent_70%)] pointer-events-none" />
 
       <div className="max-w-5xl mx-auto">
         <div className="grid md:grid-cols-2 gap-16 md:gap-24 items-center">

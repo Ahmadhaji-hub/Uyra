@@ -22,7 +22,7 @@ export default function FutureSection() {
       <div className="section-line absolute top-0 left-0 right-0" />
 
       {/* Background */}
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_60%,rgba(100,80,200,0.04)_0%,transparent_70%)]" />
+      <div className="absolute inset-0 bg-[radial-gradient(ellipse_80%_60%_at_50%_60%,rgba(100,80,200,0.04)_0%,transparent_70%)] pointer-events-none" />
 
       <div className="max-w-5xl mx-auto">
         <motion.p
