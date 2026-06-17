@@ -14,7 +14,7 @@ export default function HeroSection() {
 
       {/* Particle orb */}
       <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-        <div className="w-full h-full max-w-4xl mx-auto opacity-90">
+        <div className="w-full h-full max-w-4xl mx-auto opacity-90 scale-[1.04]">
           <ParticleOrb />
         </div>
       </div>
