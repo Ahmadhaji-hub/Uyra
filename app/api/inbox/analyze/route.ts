@@ -14,14 +14,16 @@
  *     try/catch so a DB write failure never breaks the analysis response.
  */
 
-import { NextResponse }                 from 'next/server'
-import { getServerSession }             from 'next-auth'
-import { authOptions }                  from '@/lib/auth'
-import { analyzeInbox }                 from '@/lib/gmail'
-import { generatePriorities }           from '@/lib/priorities'
-import { createServerSupabaseClient }   from '@/lib/supabase-server'
-import { readMemoryContext }            from '@/lib/memory-reader'
-import { updateMemory }                 from '@/lib/memory-writer'
+import { NextResponse }                          from 'next/server'
+import { getServerSession }                      from 'next-auth'
+import { authOptions }                           from '@/lib/auth'
+import { analyzeInbox }                          from '@/lib/gmail'
+import { generatePriorities, PrioritiesDebug }  from '@/lib/priorities'
+import { createServerSupabaseClient }            from '@/lib/supabase-server'
+import { readMemoryContext }                     from '@/lib/memory-reader'
+import { updateMemory }                          from '@/lib/memory-writer'
+import fs                                        from 'fs'
+import path                                      from 'path'
 
 export async function GET() {
   // ── 1. Auth check ────────────────────────────────────────────────────────────
@@ -95,7 +97,29 @@ export async function GET() {
   }
 
   // ── 4. Generate memory-aware priorities (server-side) ───────────────────────
-  const priorities = generatePriorities(analysis, memoryContext)
+  // In development: capture before/after sender-dedup state for validation.
+  const dedupDebug: PrioritiesDebug | undefined =
+    process.env.NODE_ENV === 'development'
+      ? { needsReplyAllPassed: [], needsReplyAfterDedup: [] }
+      : undefined
+
+  const priorities = generatePriorities(analysis, memoryContext, dedupDebug)
+
+  if (dedupDebug) {
+    try {
+      fs.writeFileSync(
+        path.join(process.cwd(), 'validate-priorities-output.json'),
+        JSON.stringify({
+          generatedAt:        new Date().toISOString(),
+          rawNeedsReplyCount: analysis.needsReply.length,
+          rawNeedsReply:      analysis.needsReply,
+          beforeDedup:        dedupDebug.needsReplyAllPassed,
+          afterDedup:         dedupDebug.needsReplyAfterDedup,
+          finalPriorities:    priorities,
+        }, null, 2)
+      )
+    } catch { /* non-fatal */ }
+  }
 
   // ── 5. Update memory tables (non-blocking on failure) ───────────────────────
   // Runs after priorities so memory latency does not affect this response.

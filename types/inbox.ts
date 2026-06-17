@@ -17,10 +17,11 @@ export interface Topic {
 }
 
 export interface NeedsReplyItem {
-  threadId: string   // stable Gmail thread ID — primary key for decision_memory
-  subject:  string
-  from:     string
-  lastDate: string
+  threadId:  string   // stable Gmail thread ID — primary key for decision_memory
+  subject:   string
+  from:      string   // display name
+  fromEmail: string   // sender email — stable dedup key
+  lastDate:  string
 }
 
 export interface InboxAnalysis {

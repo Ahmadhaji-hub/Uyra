@@ -34,6 +34,27 @@ import type { InboxAnalysis, Person } from '@/types/inbox'
 import type { Priority, PriorityType } from '@/types/priorities'
 import type { MemoryContext, PersonMemoryRecord, DecisionMemoryRecord } from '@/types/memory'
 
+// ─── Debug capture type (dev-only) ───────────────────────────────────────────
+
+export interface PrioritiesDebug {
+  /** Items that passed all pre-dedup filters (claim, automated, stale) */
+  needsReplyAllPassed: Array<{
+    from:          string
+    fromEmail:     string
+    subject:       string
+    threadId:      string
+    resolvedEmail: string | null
+  }>
+  /** Items that survived sender dedup — one per unique sender identity */
+  needsReplyAfterDedup: Array<{
+    from:      string
+    fromEmail: string
+    subject:   string
+    threadId:  string
+    senderKey: string
+  }>
+}
+
 // ─── Automated-sender detection ───────────────────────────────────────────────
 //
 // lib/gmail.ts already filters score=0 senders out of analysis.people.
@@ -97,6 +118,7 @@ function isAutomatedSender(from: string, person: Person | undefined): boolean {
 export function generatePriorities(
   analysis:       InboxAnalysis,
   memoryContext?: MemoryContext,
+  debug?:         PrioritiesDebug,
 ): Priority[] {
   const idx     = buildPersonIndex(analysis.people)
   const claimed = new Set<string>()    // subjects already assigned to a priority
@@ -116,7 +138,7 @@ export function generatePriorities(
   const opportunities = genOpportunities(analysis, idx, claimed, personMemMap)
   opportunities.forEach(p => claimed.add(p.relatedThread ?? p.id))
 
-  const replies       = genNeedsReply(analysis, idx, claimed, personMemMap)
+  const replies       = genNeedsReply(analysis, idx, claimed, personMemMap, debug)
   replies.forEach(p => claimed.add(p.relatedThread ?? p.id))
 
   const followUps     = genFollowUps(analysis, idx)
@@ -258,7 +280,13 @@ function genNeedsReply(
   idx:          Map<string, Person>,
   claimed:      Set<string>,
   personMemMap: Map<string, PersonMemoryRecord>,
+  debug?:       PrioritiesDebug,
 ): Priority[] {
+  // One priority per sender identity — keyed by resolved email (known person)
+  // or actual fromEmail header (unknown sender). Prevents duplicate NEEDS_REPLY
+  // entries for the same sender across multiple threads / casing variants.
+  const claimedSenders = new Set<string>()
+
   return a.needsReply
     .map(item => {
       if (claimed.has(item.subject)) return null
@@ -267,10 +295,40 @@ function genNeedsReply(
       // Fix #2: skip automated senders entirely
       if (isAutomatedSender(item.from, person)) return null
 
-      const days  = parseDaysAgo(item.lastDate)
+      const days = parseDaysAgo(item.lastDate)
 
       // Skip: unknown sender + stale + no urgency
       if (!person && days > 14 && !URGENT_RX.test(item.subject)) return null
+
+      // Stable sender dedup key:
+      //   resolved person  → canonical email (case-insensitive)
+      //   unresolved       → fromEmail from header (stable), fallback to display name
+      const senderKey = person
+        ? person.email.toLowerCase()
+        : (item.fromEmail
+            ? item.fromEmail.toLowerCase()
+            : item.from.toLowerCase().trim())
+
+      // Collect items that passed all pre-dedup filters (for debug)
+      debug?.needsReplyAllPassed.push({
+        from:          item.from,
+        fromEmail:     item.fromEmail,
+        subject:       item.subject,
+        threadId:      item.threadId,
+        resolvedEmail: person?.email ?? null,
+      })
+
+      if (claimedSenders.has(senderKey)) return null
+      claimedSenders.add(senderKey)
+
+      // Collect items that survived sender dedup (for debug)
+      debug?.needsReplyAfterDedup.push({
+        from:      item.from,
+        fromEmail: item.fromEmail,
+        subject:   item.subject,
+        threadId:  item.threadId,
+        senderKey,
+      })
 
       let score = 50
       score = applyPersonSignals(score, person, personMemMap)
