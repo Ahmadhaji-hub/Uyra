@@ -237,7 +237,7 @@ function processThreads(
     const rawSubject = getHeader(messages[0], 'Subject') ?? ''
     const cleaned    = cleanSubject(rawSubject)
 
-    for (const senderKey of sendersInThread) {
+    for (const senderKey of Array.from(sendersInThread)) {
       const acc = peopleMap.get(senderKey)
       if (!acc) continue
       if (acc.subjectSamples.length < 20) acc.subjectSamples.push(rawSubject)
