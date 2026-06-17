@@ -16,10 +16,66 @@
  *         + urgency bonus                 (+8 if subject matches urgent keywords)
  *         − unknown sender penalty        (−10 if sender not found in people list)
  *   clamped to [0, 100]
+ *
+ * Bug fixes applied (v2):
+ *   #1  buildReplyTitle — skip "from Company" suffix if company already in sender name
+ *   #2  isAutomatedSender — filter automated/system senders before generating priorities
+ *   #3  buildImportantPersonTitle — contextual insight titles instead of generic label
  */
 
 import type { InboxAnalysis, Person } from '@/types/inbox'
 import type { Priority, PriorityType } from '@/types/priorities'
+
+// ─── Automated-sender detection ───────────────────────────────────────────────
+//
+// lib/gmail.ts already filters score=0 senders out of analysis.people.
+// However, analysis.needsReply is built from ALL unanswered threads and can
+// contain automated senders whose display name is the only signal available.
+//
+// Strategy:
+//   1. If sender IS in the people index → they passed gmail.ts scoring (score > 0)
+//      → treat as human; no automated check needed.
+//   2. If sender is NOT in the people index → apply name-based heuristics below.
+
+/** Matches common automated-sender display names. */
+const AUTOMATED_NAME_RX =
+  /\b(no[._-]?reply|do[._-]?not[._-]?reply|noreply|donotreply|notification|notifications|automated|mailer[._-]?daemon|postmaster|bounce|delivery[._-]?subsystem|unsubscribe|newsletter|alert|alerts|updates)\b/i
+
+/**
+ * Well-known services that send system/transactional mail under their brand name.
+ * Only exact full-name matches are tested (not partial) to avoid collateral damage.
+ */
+const WELL_KNOWN_SYSTEM_NAMES = new Set([
+  'google', 'gmail', 'youtube', 'google security', 'google workspace',
+  'microsoft', 'outlook', 'onedrive', 'office 365',
+  'linkedin', 'linkedin notifications',
+  'twitter', 'x', 'instagram', 'facebook', 'tiktok',
+  'amazon', 'amazon web services', 'aws',
+  'paypal', 'stripe', 'shopify',
+  'github', 'github notifications',
+  'slack', 'zoom', 'dropbox', 'notion',
+  'apple', 'icloud',
+  'spotify', 'netflix', 'uber', 'airbnb',
+])
+
+/**
+ * Returns true if this sender should be excluded from priorities.
+ *
+ * @param from    Display name from the email (NeedsReplyItem.from)
+ * @param person  Resolved Person from the people index, or undefined if not found
+ *
+ * Key invariant: if `person` is defined, they passed gmail.ts's score > 0 filter
+ * and are therefore a real human sender — no further checking needed.
+ * Only unknown (person === undefined) senders require name heuristics.
+ */
+function isAutomatedSender(from: string, person: Person | undefined): boolean {
+  // Known human from gmail.ts scoring — always allow
+  if (person !== undefined) return false
+  const norm = from.toLowerCase().trim()
+  if (AUTOMATED_NAME_RX.test(norm)) return true
+  if (WELL_KNOWN_SYSTEM_NAMES.has(norm)) return true
+  return false
+}
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
@@ -51,7 +107,6 @@ function buildPersonIndex(people: Person[]): Map<string, Person> {
   const idx = new Map<string, Person>()
   for (const p of people) {
     idx.set(p.name.toLowerCase().trim(), p)
-    // Also index by first name for loose matching
     const first = p.name.split(/\s+/)[0].toLowerCase()
     if (!idx.has(first)) idx.set(first, p)
   }
@@ -84,11 +139,14 @@ function genDecisions(
   claimed: Set<string>,
 ): Priority[] {
   return a.needsReply
-    .filter(item => DECISION_RX.test(item.subject) && !claimed.has(item.subject))
     .map(item => {
+      if (!DECISION_RX.test(item.subject))  return null
+      if (claimed.has(item.subject))        return null
       const person = findPerson(idx, a.people, item.from)
-      const days   = parseDaysAgo(item.lastDate)
-      let   score  = 55
+      if (isAutomatedSender(item.from, person)) return null  // Fix #2
+
+      const days  = parseDaysAgo(item.lastDate)
+      let   score = 55
       score = applyPersonSignals(score, person)
       if      (days === 0) score += 15
       else if (days === 1) score += 12
@@ -106,6 +164,7 @@ function genDecisions(
         days,
       })
     })
+    .filter(Boolean) as Priority[]
 }
 
 // ─── OPPORTUNITY (base 52) ────────────────────────────────────────────────────
@@ -120,11 +179,14 @@ function genOpportunities(
   claimed: Set<string>,
 ): Priority[] {
   return a.needsReply
-    .filter(item => OPPORTUNITY_RX.test(item.subject) && !claimed.has(item.subject))
     .map(item => {
+      if (!OPPORTUNITY_RX.test(item.subject)) return null
+      if (claimed.has(item.subject))          return null
       const person = findPerson(idx, a.people, item.from)
-      const days   = parseDaysAgo(item.lastDate)
-      let   score  = 52
+      if (isAutomatedSender(item.from, person)) return null  // Fix #2
+
+      const days  = parseDaysAgo(item.lastDate)
+      let   score = 52
       score = applyPersonSignals(score, person)
       if      (days === 0) score += 15
       else if (days <=  3) score += 10
@@ -141,6 +203,7 @@ function genOpportunities(
         days,
       })
     })
+    .filter(Boolean) as Priority[]
 }
 
 // ─── NEEDS_REPLY (base 50) ────────────────────────────────────────────────────
@@ -155,12 +218,16 @@ function genNeedsReply(
   claimed: Set<string>,
 ): Priority[] {
   return a.needsReply
-    .filter(item => !claimed.has(item.subject))
     .map(item => {
+      if (claimed.has(item.subject)) return null
       const person = findPerson(idx, a.people, item.from)
-      const days   = parseDaysAgo(item.lastDate)
 
-      // Skip: unknown sender + stale (no human signal, no urgency)
+      // Fix #2: skip automated senders entirely
+      if (isAutomatedSender(item.from, person)) return null
+
+      const days  = parseDaysAgo(item.lastDate)
+
+      // Skip: unknown sender + stale + no urgency
       if (!person && days > 14 && !URGENT_RX.test(item.subject)) return null
 
       let score = 50
@@ -179,7 +246,7 @@ function genNeedsReply(
 
       return mkPriority({
         type:        'NEEDS_REPLY',
-        title:       buildReplyTitle(item.from, person?.email),
+        title:       buildReplyTitle(item.from, person?.email),  // Fix #1 applied here
         description: desc,
         score:       clamp(score),
         person,
@@ -193,7 +260,6 @@ function genNeedsReply(
 
 // ─── FOLLOW_UP (base 40) ──────────────────────────────────────────────────────
 // Important contacts who are NOT currently waiting on your reply.
-// Surfaces "you should check in" signals.
 
 function genFollowUps(
   a:   InboxAnalysis,
@@ -203,7 +269,6 @@ function genFollowUps(
     .filter(p => {
       if (p.score < 45)                return false
       if (p.relationship === 'dormant') return false
-      // Skip if they're already surfaced in needsReply
       return !a.needsReply.some(n =>
         n.from.toLowerCase().includes(p.name.split(/\s+/)[0].toLowerCase()),
       )
@@ -231,8 +296,7 @@ function genFollowUps(
 }
 
 // ─── IMPORTANT_PERSON (base 35) ───────────────────────────────────────────────
-// Top frequent contacts not already covered by thread-based priorities.
-// Limit: 2 cards maximum.
+// Top frequent contacts. Title explains WHY they matter (Fix #3).
 
 function genImportantPersons(a: InboxAnalysis): Priority[] {
   return a.people
@@ -243,8 +307,8 @@ function genImportantPersons(a: InboxAnalysis): Priority[] {
       return {
         id:           `important:${p.email}`,
         type:         'IMPORTANT_PERSON' as PriorityType,
-        title:        `${p.name} is a key contact`,
-        description:  `${p.threadCount} threads · ${p.relationship} relationship`,
+        title:        buildImportantPersonTitle(p),        // Fix #3
+        description:  buildImportantPersonDescription(p),  // Fix #3
         score,
         relatedPerson: { name: p.name, email: p.email },
       }
@@ -280,11 +344,10 @@ function mkPriority(i: MkInput): Priority {
 }
 
 /**
- * applyPersonSignals — shared scoring modifiers derived from Person metadata.
- * Called by all thread-based generators (DECISION, OPPORTUNITY, NEEDS_REPLY).
+ * applyPersonSignals — shared scoring modifiers from Person metadata.
  *
  * +25 max  person.score × 0.25  (importance of the sender)
- * +10      twoWay               (you have also sent to them)
+ * +10      twoWay               (user has also sent to them)
  * +8 / +4  relationship         (frequent / active)
  */
 function applyPersonSignals(score: number, person: Person | undefined): number {
@@ -297,12 +360,19 @@ function applyPersonSignals(score: number, person: Person | undefined): number {
 }
 
 /**
- * buildReplyTitle — produces "Reply to Robert from Cloudbet" when the sender
- * has a known professional email domain, or "Reply to Robert" for personal email.
+ * buildReplyTitle — Fix #1
+ *
+ * Produces "Reply to Sam from Lovable" when the sender has a professional
+ * email domain. Skips the "from Company" suffix if the company name is already
+ * present in the sender's display name to prevent "Reply to Sam from Lovable
+ * from Lovable".
  */
 function buildReplyTitle(nameStr: string, email?: string): string {
   const company = email ? domainToCompany(email) : null
-  return company ? `Reply to ${nameStr} from ${company}` : `Reply to ${nameStr}`
+  if (!company) return `Reply to ${nameStr}`
+  // Fix #1: don't append company if it's already in the sender name
+  if (nameStr.toLowerCase().includes(company.toLowerCase())) return `Reply to ${nameStr}`
+  return `Reply to ${nameStr} from ${company}`
 }
 
 /** Returns a capitalised company name from a professional email domain, or null. */
@@ -319,10 +389,51 @@ function domainToCompany(email: string): string | null {
 }
 
 /**
- * parseDaysAgo — converts the formatted lastDate string from InboxAnalysis
- * back to a number of days for scoring calculations.
+ * buildImportantPersonTitle — Fix #3
  *
- * Supported formats: "Today", "Yesterday", "N days ago", "N weeks ago", "N months ago"
+ * Generates a contextual insight title instead of a generic "is a key contact"
+ * label. Uses score + twoWay + relationship + threadCount to pick the most
+ * relevant framing.
+ */
+function buildImportantPersonTitle(p: Person): string {
+  const first = firstNameOf(p.name)
+
+  // Highest-quality signal: strong score, two-way, frequent contact
+  if (p.score >= 80 && p.twoWay) {
+    return `${first} remains one of your strongest contacts`
+  }
+  // One-sided: person reaches out but user never replied
+  if (!p.twoWay && p.relationship === 'frequent') {
+    return `You haven't been responding to ${first} lately`
+  }
+  // Score approaching the threshold — relationship weakening
+  if (p.score < 70 && p.relationship === 'frequent') {
+    return `Relationship with ${first} is becoming less active`
+  }
+  // Good two-way relationship with strong thread depth
+  if (p.twoWay && p.threadCount >= 8) {
+    return `Strong two-way relationship with ${first}`
+  }
+  // General importance signal
+  return `${first} is an important contact`
+}
+
+/** Supporting description for IMPORTANT_PERSON — always shows factual thread context. */
+function buildImportantPersonDescription(p: Person): string {
+  const parts: string[] = [`${p.threadCount} threads`]
+  if (p.twoWay) parts.push('two-way')
+  parts.push(p.relationship)
+  return parts.join(' · ')
+}
+
+/** Returns the first word of a display name (first name). */
+function firstNameOf(name: string): string {
+  return name.split(/\s+/)[0]
+}
+
+/**
+ * parseDaysAgo — converts InboxAnalysis lastDate strings back to day counts.
+ * Supported: "Today", "Yesterday", "N days ago", "N weeks ago", "N months ago"
  */
 function parseDaysAgo(dateStr: string): number {
   if (!dateStr || dateStr === 'Today')    return 0
@@ -333,7 +444,7 @@ function parseDaysAgo(dateStr: string): number {
   if (w) return parseInt(w[1]) * 7
   const m = dateStr.match(/^(\d+)\s+months?\s+ago$/i)
   if (m) return parseInt(m[1]) * 30
-  return 0   // unknown format → treat as today
+  return 0
 }
 
 function clamp(n: number): number {

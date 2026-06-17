@@ -46,7 +46,14 @@ export default function InboxPage() {
 
         if (!res.ok) {
           if (data.code === 'TOKEN_EXPIRED') {
+            // Access token hard-expired and no refresh token — full re-auth
             await signIn('google', { callbackUrl: '/inbox' })
+            return
+          }
+          if (data.code === 'REFRESH_ERROR') {
+            // Refresh token revoked (user revoked app access in Google settings,
+            // or token was invalidated). Send back through Gmail connect flow.
+            router.push('/connect')
             return
           }
           throw new Error(data.error ?? 'Analysis failed')
