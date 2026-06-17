@@ -1,6 +1,6 @@
 'use client'
 
-import { motion } from 'framer-motion'
+import Link from 'next/link'
 
 export default function Footer() {
   return (
@@ -13,8 +13,8 @@ export default function Footer() {
         </div>
 
         <div className="flex items-center gap-8 text-xs text-[#3a3a3a]">
-          <a href="#" className="hover:text-[#7a7a7a] transition-colors duration-200">Privacy</a>
-          <a href="#" className="hover:text-[#7a7a7a] transition-colors duration-200">Terms</a>
+          <Link href="/privacy" className="hover:text-[#7a7a7a] transition-colors duration-200">Privacy</Link>
+          <Link href="/terms" className="hover:text-[#7a7a7a] transition-colors duration-200">Terms</Link>
           <a href="mailto:hello@uyra.ai" className="hover:text-[#7a7a7a] transition-colors duration-200">Contact</a>
         </div>
 
