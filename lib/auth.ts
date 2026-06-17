@@ -18,17 +18,23 @@ export const authOptions: NextAuthOptions = {
 
   callbacks: {
     async jwt({ token, account }) {
-      // account is only present on the first sign-in
       if (account) {
         token.accessToken  = account.access_token
         token.refreshToken = account.refresh_token
+
+        // Set gmailConnected only when the gmail.readonly scope is present.
+        // Never reset to false — once granted it persists in the JWT cookie
+        // until the user signs out.
+        if (account.scope?.includes('https://www.googleapis.com/auth/gmail.readonly')) {
+          token.gmailConnected = true
+        }
       }
       return token
     },
 
     async session({ session, token }) {
-      // expose accessToken to server components via getServerSession()
-      session.accessToken = token.accessToken as string | undefined
+      session.accessToken   = token.accessToken   as string | undefined
+      session.gmailConnected = token.gmailConnected as boolean ?? false
       return session
     },
   },
