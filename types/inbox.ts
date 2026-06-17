@@ -17,6 +17,7 @@ export interface Topic {
 }
 
 export interface NeedsReplyItem {
+  threadId: string   // stable Gmail thread ID — primary key for decision_memory
   subject:  string
   from:     string
   lastDate: string

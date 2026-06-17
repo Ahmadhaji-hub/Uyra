@@ -262,6 +262,7 @@ function processThreads(
 
     if (lastEmail.toLowerCase() !== normalizedUser) {
       needsReply.push({
+        threadId: threadId,
         subject:  (cleaned || rawSubject || '(no subject)').slice(0, 80),
         from:     lastSender,
         lastDate: formatDate(getHeader(lastMsg, 'Date') ?? ''),

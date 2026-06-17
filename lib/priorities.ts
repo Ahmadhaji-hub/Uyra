@@ -1,13 +1,14 @@
 /**
- * Milestone 4 — Priorities Engine
+ * Milestone 4 — Priorities Engine  (Memory-aware V2)
  *
  * Pure, deterministic function. No AI, no LLMs. All signals derived from
- * InboxAnalysis metadata already computed by lib/gmail.ts.
+ * InboxAnalysis metadata computed by lib/gmail.ts, optionally enriched by
+ * MemoryContext from the memory layer (Phase 1).
  *
  * Priority precedence (per thread): DECISION > OPPORTUNITY > NEEDS_REPLY
  * FOLLOW_UP and IMPORTANT_PERSON are relationship-based, never thread-based.
  *
- * Scoring formula per type:
+ * Base scoring formula per type:
  *   score = base
  *         + person.score × 0.25          (up to +25 — importance of the person)
  *         + twoWay bonus                 (+10 if bidirectional relationship)
@@ -17,7 +18,13 @@
  *         − unknown sender penalty        (−10 if sender not found in people list)
  *   clamped to [0, 100]
  *
- * Bug fixes applied (v2):
+ * Memory-layer additions (Phase 1):
+ *   applyPersonSignals:
+ *     + historical avg boost  (+0…+8 when avg_score > current by >10, ≥3 samples)
+ *   genDecisions:
+ *     + persistence boost     (+0…+15 based on times_seen in decision_memory)
+ *
+ * Bugs fixed (v2):
  *   #1  buildReplyTitle — skip "from Company" suffix if company already in sender name
  *   #2  isAutomatedSender — filter automated/system senders before generating priorities
  *   #3  buildImportantPersonTitle — contextual insight titles instead of generic label
@@ -25,6 +32,7 @@
 
 import type { InboxAnalysis, Person } from '@/types/inbox'
 import type { Priority, PriorityType } from '@/types/priorities'
+import type { MemoryContext, PersonMemoryRecord, DecisionMemoryRecord } from '@/types/memory'
 
 // ─── Automated-sender detection ───────────────────────────────────────────────
 //
@@ -79,18 +87,36 @@ function isAutomatedSender(from: string, person: Person | undefined): boolean {
 
 // ─── Entry point ──────────────────────────────────────────────────────────────
 
-export function generatePriorities(analysis: InboxAnalysis): Priority[] {
+/**
+ * Generate memory-aware priorities from an InboxAnalysis.
+ *
+ * @param analysis       Current inbox analysis
+ * @param memoryContext  Optional — enriches scoring when present. First run
+ *                       will have no memory; subsequent runs benefit from history.
+ */
+export function generatePriorities(
+  analysis:       InboxAnalysis,
+  memoryContext?: MemoryContext,
+): Priority[] {
   const idx     = buildPersonIndex(analysis.people)
   const claimed = new Set<string>()    // subjects already assigned to a priority
 
+  // Build memory lookup maps (empty Maps when no context available)
+  const personMemMap:   Map<string, PersonMemoryRecord>   = new Map(
+    (memoryContext?.persons ?? []).map(p => [p.personEmail.toLowerCase(), p])
+  )
+  const decisionMemMap: Map<string, DecisionMemoryRecord> = new Map(
+    (memoryContext?.decisions ?? []).map(d => [d.threadId, d])
+  )
+
   // Process in precedence order so each thread is typed exactly once
-  const decisions     = genDecisions(analysis, idx, claimed)
+  const decisions     = genDecisions(analysis, idx, claimed, personMemMap, decisionMemMap)
   decisions.forEach(p => claimed.add(p.relatedThread ?? p.id))
 
-  const opportunities = genOpportunities(analysis, idx, claimed)
+  const opportunities = genOpportunities(analysis, idx, claimed, personMemMap)
   opportunities.forEach(p => claimed.add(p.relatedThread ?? p.id))
 
-  const replies       = genNeedsReply(analysis, idx, claimed)
+  const replies       = genNeedsReply(analysis, idx, claimed, personMemMap)
   replies.forEach(p => claimed.add(p.relatedThread ?? p.id))
 
   const followUps     = genFollowUps(analysis, idx)
@@ -134,9 +160,11 @@ const DECISION_RX =
   /\b(decision|approval|approve|review|sign.?off|confirm(?:ation)?|deadline|asap|action required|pending|needs your|requires your)\b/i
 
 function genDecisions(
-  a:       InboxAnalysis,
-  idx:     Map<string, Person>,
-  claimed: Set<string>,
+  a:             InboxAnalysis,
+  idx:           Map<string, Person>,
+  claimed:       Set<string>,
+  personMemMap:  Map<string, PersonMemoryRecord>,
+  decisionMemMap: Map<string, DecisionMemoryRecord>,
 ): Priority[] {
   return a.needsReply
     .map(item => {
@@ -147,16 +175,23 @@ function genDecisions(
 
       const days  = parseDaysAgo(item.lastDate)
       let   score = 55
-      score = applyPersonSignals(score, person)
+      score = applyPersonSignals(score, person, personMemMap)
       if      (days === 0) score += 15
       else if (days === 1) score += 12
       else if (days <=  3) score +=  8
       else if (days <=  7) score +=  4
 
+      // Memory: persistence boost — decisions that keep surfacing are more urgent
+      // Keyed by stable thread_id, not normalized subject
+      const decisionMem = decisionMemMap.get(item.threadId)
+      if (decisionMem && !decisionMem.isResolved) {
+        score += Math.min(decisionMem.timesSeen * 3, 15)
+      }
+
       return mkPriority({
         type:        'DECISION',
         title:       `Decision: ${truncate(item.subject, 45)}`,
-        description: 'May require your approval or confirmation',
+        description: buildDecisionDescription(decisionMem),
         score:       clamp(score),
         person,
         nameStr:     item.from,
@@ -167,6 +202,11 @@ function genDecisions(
     .filter(Boolean) as Priority[]
 }
 
+function buildDecisionDescription(mem: DecisionMemoryRecord | undefined): string {
+  if (!mem || mem.timesSeen <= 1) return 'May require your approval or confirmation'
+  return `Seen ${mem.timesSeen} times — still waiting on your action`
+}
+
 // ─── OPPORTUNITY (base 52) ────────────────────────────────────────────────────
 // Invitations, proposals, introductions, or partnership threads.
 
@@ -174,9 +214,10 @@ const OPPORTUNITY_RX =
   /\b(invite|invitation|proposal|offer|opportunity|introduction|intro|join|partnership|collaborat|would you|interested in|interview|speaking)\b/i
 
 function genOpportunities(
-  a:       InboxAnalysis,
-  idx:     Map<string, Person>,
-  claimed: Set<string>,
+  a:            InboxAnalysis,
+  idx:          Map<string, Person>,
+  claimed:      Set<string>,
+  personMemMap: Map<string, PersonMemoryRecord>,
 ): Priority[] {
   return a.needsReply
     .map(item => {
@@ -187,7 +228,7 @@ function genOpportunities(
 
       const days  = parseDaysAgo(item.lastDate)
       let   score = 52
-      score = applyPersonSignals(score, person)
+      score = applyPersonSignals(score, person, personMemMap)
       if      (days === 0) score += 15
       else if (days <=  3) score += 10
       else if (days <=  7) score +=  5
@@ -213,9 +254,10 @@ const URGENT_RX =
   /\b(urgent|asap|critical|important|deadline|time.sensitive|action required)\b/i
 
 function genNeedsReply(
-  a:       InboxAnalysis,
-  idx:     Map<string, Person>,
-  claimed: Set<string>,
+  a:            InboxAnalysis,
+  idx:          Map<string, Person>,
+  claimed:      Set<string>,
+  personMemMap: Map<string, PersonMemoryRecord>,
 ): Priority[] {
   return a.needsReply
     .map(item => {
@@ -231,7 +273,7 @@ function genNeedsReply(
       if (!person && days > 14 && !URGENT_RX.test(item.subject)) return null
 
       let score = 50
-      score = applyPersonSignals(score, person)
+      score = applyPersonSignals(score, person, personMemMap)
       if (!person)              score -= 10
       if      (days === 0) score += 20
       else if (days === 1) score += 15
@@ -344,18 +386,39 @@ function mkPriority(i: MkInput): Priority {
 }
 
 /**
- * applyPersonSignals — shared scoring modifiers from Person metadata.
+ * applyPersonSignals — shared scoring modifiers from Person metadata + memory.
  *
- * +25 max  person.score × 0.25  (importance of the sender)
- * +10      twoWay               (user has also sent to them)
- * +8 / +4  relationship         (frequent / active)
+ * From live data:
+ *   +25 max  person.score × 0.25  (importance of the sender)
+ *   +10      twoWay               (user has also sent to them)
+ *   +8 / +4  relationship         (frequent / active)
+ *
+ * From memory (Phase 1):
+ *   +0…+8    historical avg > current by >10, with ≥3 samples
+ *            Stabilises high-importance contacts whose current score dipped
+ *            due to a quieter week in the sampled 100 threads.
  */
-function applyPersonSignals(score: number, person: Person | undefined): number {
+function applyPersonSignals(
+  score:        number,
+  person:       Person | undefined,
+  personMemMap: Map<string, PersonMemoryRecord>,
+): number {
   if (!person) return score
   score += Math.round(person.score * 0.25)
   if (person.twoWay)                        score += 10
   if (person.relationship === 'frequent')   score +=  8
   else if (person.relationship === 'active') score +=  4
+
+  // Memory stabilization: boost contacts whose historical avg is higher than
+  // their current score (e.g. a key contact who was quieter this week).
+  const mem = personMemMap.get(person.email.toLowerCase())
+  if (mem && mem.scoreSamples.length >= 3) {
+    const historicalLift = mem.avgScore - person.score
+    if (historicalLift > 10) {
+      score += Math.min(Math.round(historicalLift * 0.3), 8)
+    }
+  }
+
   return score
 }
 

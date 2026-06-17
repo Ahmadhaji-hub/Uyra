@@ -1,17 +1,37 @@
-import { NextResponse } from 'next/server'
-import { getServerSession } from 'next-auth'
-import { authOptions } from '@/lib/auth'
-import { analyzeInbox } from '@/lib/gmail'
+/**
+ * GET /api/inbox/analyze
+ *
+ * Runs Gmail inbox analysis, reads memory context, generates memory-aware
+ * priorities server-side, updates memory tables, and returns the combined
+ * result to the client.
+ *
+ * Response shape: InboxAnalysis fields + priorities: Priority[]
+ *
+ * Memory update strategy:
+ *   · readMemoryContext() runs BEFORE priority generation so priorities
+ *     benefit from historical data on every subsequent call.
+ *   · updateMemory() runs AFTER priorities are computed and is wrapped in
+ *     try/catch so a DB write failure never breaks the analysis response.
+ */
+
+import { NextResponse }                 from 'next/server'
+import { getServerSession }             from 'next-auth'
+import { authOptions }                  from '@/lib/auth'
+import { analyzeInbox }                 from '@/lib/gmail'
+import { generatePriorities }           from '@/lib/priorities'
+import { createServerSupabaseClient }   from '@/lib/supabase-server'
+import { readMemoryContext }            from '@/lib/memory-reader'
+import { updateMemory }                 from '@/lib/memory-writer'
 
 export async function GET() {
-  // 1. Auth check
+  // ── 1. Auth check ────────────────────────────────────────────────────────────
   const session = await getServerSession(authOptions)
 
   if (!session) {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
   }
 
-  // ── Gmail connection state gate ───────────────────────────────────────────
+  // ── Gmail connection state gate ───────────────────────────────────────────────
   // 'needs_reconnect' — refresh token revoked or scopes changed; user must
   //   re-grant via the connect page. Return 401 so the client routes there.
   // 'disconnected'    — user has never connected Gmail. Return 403.
@@ -41,10 +61,12 @@ export async function GET() {
     return NextResponse.json({ error: 'Missing user email' }, { status: 400 })
   }
 
-  // 2. Run analysis
+  const userId = session.user.email
+
+  // ── 2. Run Gmail analysis ────────────────────────────────────────────────────
+  let analysis
   try {
-    const analysis = await analyzeInbox(session.accessToken, session.user.email)
-    return NextResponse.json(analysis)
+    analysis = await analyzeInbox(session.accessToken, userId)
   } catch (err: unknown) {
     const message = err instanceof Error ? err.message : 'Analysis failed'
 
@@ -56,7 +78,35 @@ export async function GET() {
       )
     }
 
-    console.error('[inbox/analyze] error:', err)
+    console.error('[inbox/analyze] Gmail error:', err)
     return NextResponse.json({ error: message }, { status: 500 })
   }
+
+  // ── 3. Read memory context ───────────────────────────────────────────────────
+  // Memory read errors are non-fatal: fall back to empty context so priorities
+  // are still generated (without historical enrichment).
+  let memoryContext
+  try {
+    const supabase = createServerSupabaseClient()
+    memoryContext  = await readMemoryContext(supabase, userId)
+  } catch (err) {
+    console.error('[inbox/analyze] Memory read failed (non-fatal):', err)
+    memoryContext = { persons: [], topics: [], buckets: [], decisions: [] }
+  }
+
+  // ── 4. Generate memory-aware priorities (server-side) ───────────────────────
+  const priorities = generatePriorities(analysis, memoryContext)
+
+  // ── 5. Update memory tables (non-blocking on failure) ───────────────────────
+  // Runs after priorities so memory latency does not affect this response.
+  // Errors are logged but never surfaced to the client.
+  try {
+    const supabase = createServerSupabaseClient()
+    await updateMemory(supabase, userId, analysis, memoryContext)
+  } catch (err) {
+    console.error('[inbox/analyze] Memory update failed (non-fatal):', err)
+  }
+
+  // ── 6. Return combined result ────────────────────────────────────────────────
+  return NextResponse.json({ ...analysis, priorities })
 }

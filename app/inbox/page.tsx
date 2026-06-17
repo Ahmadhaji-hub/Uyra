@@ -5,7 +5,10 @@ import { useSession, signIn } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import type { InboxAnalysis, Person, RelationshipStatus } from '@/types/inbox'
 import type { Priority, PriorityType } from '@/types/priorities'
-import { generatePriorities } from '@/lib/priorities'
+
+// Priorities are generated server-side in /api/inbox/analyze (memory-aware).
+// The API response extends InboxAnalysis with a `priorities` field.
+type AnalyzeResponse = InboxAnalysis & { priorities: Priority[] }
 
 const STATUS_MESSAGES = [
   'Reading your inbox…',
@@ -64,9 +67,9 @@ export default function InboxPage() {
           throw new Error(data.error ?? 'Analysis failed')
         }
 
-        const inbox = data as InboxAnalysis
-        setAnalysis(inbox)
-        setPriorities(generatePriorities(inbox))
+        const { priorities: serverPriorities, ...inboxData } = data as AnalyzeResponse
+        setAnalysis(inboxData)
+        setPriorities(serverPriorities ?? [])
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Something went wrong')
       } finally {
