@@ -2,11 +2,16 @@
 
 import { motion, useScroll, useTransform } from 'framer-motion'
 import Link from 'next/link'
+import { useSession } from 'next-auth/react'
 
 export default function Nav() {
   const { scrollY } = useScroll()
   const bgOpacity = useTransform(scrollY, [0, 80], [0, 0.88])
   const borderOpacity = useTransform(scrollY, [0, 80], [0, 0.07])
+
+  const { data: session } = useSession()
+  const authHref  = session ? '/dashboard' : '/signin'
+  const authLabel = session ? 'Dashboard'  : 'Sign In'
 
   return (
     <motion.header
@@ -39,7 +44,7 @@ export default function Nav() {
           Uyra
         </motion.a>
 
-        {/* Right group: links + button */}
+        {/* Right group: links + buttons */}
         <motion.div
           className="flex items-center gap-1"
           initial={{ opacity: 0 }}
@@ -58,6 +63,15 @@ export default function Nav() {
 
           <div className="w-px h-4 bg-white/8 mx-2" />
 
+          {/* Auth button: Sign In or Dashboard */}
+          <Link
+            href={authHref}
+            className="px-5 py-2 text-sm rounded-full border border-white/8 text-[#7a7a7a] hover:text-[#f8f8f8] hover:border-white/14 transition-all duration-200"
+          >
+            {authLabel}
+          </Link>
+
+          {/* Always visible */}
           <a
             href="#waitlist"
             className="px-5 py-2 text-sm rounded-full border border-white/12 text-[#f8f8f8] hover:bg-white/6 hover:border-white/20 transition-all duration-200"
@@ -98,6 +112,7 @@ export default function Nav() {
           <a href="#how-it-works" className="hover:text-[#f8f8f8] transition-colors duration-200">How it works</a>
           <a href="#future" className="hover:text-[#f8f8f8] transition-colors duration-200">Vision</a>
           <Link href="/manifest" className="hover:text-[#f8f8f8] transition-colors duration-200">Manifest</Link>
+          <Link href={authHref} className="hover:text-[#f8f8f8] transition-colors duration-200">{authLabel}</Link>
         </motion.div>
       </div>
 

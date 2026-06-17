@@ -1,5 +1,6 @@
 import type { Metadata } from 'next'
 import './globals.css'
+import { Providers } from '@/components/Providers'
 
 export const metadata: Metadata = {
   title: 'Uyra — Your Digital Self',
@@ -32,7 +33,7 @@ export default function RootLayout({
         />
       </head>
       <body className="bg-[#050505] text-[#f8f8f8] antialiased" style={{ fontFamily: "'Inter', system-ui, -apple-system, sans-serif" }}>
-        {children}
+        <Providers>{children}</Providers>
       </body>
     </html>
   )
