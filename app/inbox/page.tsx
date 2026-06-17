@@ -4,6 +4,8 @@ import { useState, useEffect } from 'react'
 import { useSession, signIn } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import type { InboxAnalysis, Person, RelationshipStatus } from '@/types/inbox'
+import type { Priority, PriorityType } from '@/types/priorities'
+import { generatePriorities } from '@/lib/priorities'
 
 const STATUS_MESSAGES = [
   'Reading your inbox…',
@@ -16,10 +18,11 @@ export default function InboxPage() {
   const { data: session, status } = useSession()
   const router = useRouter()
 
-  const [analysis,  setAnalysis]  = useState<InboxAnalysis | null>(null)
-  const [loading,   setLoading]   = useState(true)
-  const [error,     setError]     = useState<string | null>(null)
-  const [statusIdx, setStatusIdx] = useState(0)
+  const [analysis,   setAnalysis]   = useState<InboxAnalysis | null>(null)
+  const [priorities, setPriorities] = useState<Priority[]>([])
+  const [loading,    setLoading]    = useState(true)
+  const [error,      setError]      = useState<string | null>(null)
+  const [statusIdx,  setStatusIdx]  = useState(0)
 
   // Cycle loading messages
   useEffect(() => {
@@ -49,7 +52,9 @@ export default function InboxPage() {
           throw new Error(data.error ?? 'Analysis failed')
         }
 
-        setAnalysis(data as InboxAnalysis)
+        const inbox = data as InboxAnalysis
+        setAnalysis(inbox)
+        setPriorities(generatePriorities(inbox))
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Something went wrong')
       } finally {
@@ -87,7 +92,7 @@ export default function InboxPage() {
         <p className="text-[#f8f8f8] font-medium">Something went wrong</p>
         <p className="text-[#555] text-sm text-center max-w-xs">{error}</p>
         <button
-          onClick={() => { setError(null); setLoading(true); setStatusIdx(0) }}
+          onClick={() => { setError(null); setLoading(true); setStatusIdx(0); setPriorities([]) }}
           className="mt-2 px-6 py-2.5 text-sm rounded-full border border-white/12 text-[#f8f8f8] hover:bg-white/6 transition-all duration-200"
         >
           Try again
@@ -110,6 +115,21 @@ export default function InboxPage() {
             {analysis.threadCount} threads · analysed just now
           </p>
         </div>
+
+        {/* Today's Priorities */}
+        {priorities.length > 0 && (
+          <section>
+            <SectionHeader
+              label="Today's Priorities"
+              description="Ranked actions derived from your inbox — deterministic, no AI"
+            />
+            <ul className="space-y-2">
+              {priorities.map(p => (
+                <PriorityCard key={p.id} priority={p} />
+              ))}
+            </ul>
+          </section>
+        )}
 
         {/* Important People */}
         <section>
@@ -194,6 +214,62 @@ export default function InboxPage() {
 
       </div>
     </main>
+  )
+}
+
+// ── Priority Card ─────────────────────────────────────────────────────────────
+
+const TYPE_STYLES: Record<PriorityType, string> = {
+  NEEDS_REPLY:      'bg-red-400/10 text-red-400 border border-red-400/20',
+  FOLLOW_UP:        'bg-amber-400/10 text-amber-400 border border-amber-400/20',
+  IMPORTANT_PERSON: 'bg-[#9b8fff]/10 text-[#9b8fff] border border-[#9b8fff]/20',
+  OPPORTUNITY:      'bg-emerald-400/10 text-emerald-400 border border-emerald-400/20',
+  DECISION:         'bg-blue-400/10 text-blue-400 border border-blue-400/20',
+}
+
+const TYPE_LABELS: Record<PriorityType, string> = {
+  NEEDS_REPLY:      'Reply',
+  FOLLOW_UP:        'Follow Up',
+  IMPORTANT_PERSON: 'Key Contact',
+  OPPORTUNITY:      'Opportunity',
+  DECISION:         'Decision',
+}
+
+function PriorityCard({ priority: p }: { priority: Priority }) {
+  const hasEmail = Boolean(p.relatedPerson?.email)
+
+  return (
+    <li className="border border-white/8 rounded-xl px-5 py-4">
+      <div className="flex items-start justify-between gap-4">
+
+        {/* Left: badge + title + description + email */}
+        <div className="min-w-0 flex-1 space-y-1.5">
+          <span
+            className={`inline-block text-[9px] px-1.5 py-0.5 rounded-full tracking-wide uppercase ${TYPE_STYLES[p.type]}`}
+          >
+            {TYPE_LABELS[p.type]}
+          </span>
+          <p className="text-[#f8f8f8] text-sm font-medium leading-snug">{p.title}</p>
+          <p className="text-[#555] text-xs">{p.description}</p>
+          {hasEmail && (
+            <p className="text-[#333] text-xs">{p.relatedPerson!.email}</p>
+          )}
+        </div>
+
+        {/* Right: score + age */}
+        <div className="shrink-0 text-right pt-0.5">
+          <p className="text-[#f8f8f8] text-sm font-medium tabular-nums">
+            {p.score}<span className="text-[#444] text-xs font-normal">/100</span>
+          </p>
+          {p.ageInDays !== undefined && p.ageInDays > 0 && (
+            <p className="text-[#333] text-xs mt-0.5 whitespace-nowrap">
+              {p.ageInDays === 1 ? '1 day ago' : `${p.ageInDays}d ago`}
+            </p>
+          )}
+        </div>
+
+      </div>
+    </li>
   )
 }
 
