@@ -35,14 +35,14 @@ export default function HeroSection() {
 
         {/* Headline — most important */}
         <motion.h1
-          className="text-[clamp(3.8rem,11vw,9rem)] font-semibold leading-[0.93] tracking-[-0.045em] text-[#f8f8f8] mb-7 text-glow"
+          className="text-[clamp(3.06rem,8.91vw,7.29rem)] font-semibold leading-[0.93] tracking-[-0.045em] text-[#f8f8f8] mb-7 text-glow"
           initial={{ opacity: 0, y: 28 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.95, delay: 0.32, ease: [0.16, 1, 0.3, 1] }}
         >
           Your Digital
           <br />
-          <span className="gradient-text">Self.</span>
+          <span className="gradient-text">Self</span>
         </motion.h1>
 
         {/* Subheadline — second priority */}
@@ -52,9 +52,9 @@ export default function HeroSection() {
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.8, delay: 0.5, ease: [0.16, 1, 0.3, 1] }}
         >
-          An AI that learns you, represents you,
+          Uyra learns you, represents you,
           <br className="hidden sm:block" />
-          and acts for you.
+          and acts for you
         </motion.p>
 
         {/* CTAs — third priority */}
