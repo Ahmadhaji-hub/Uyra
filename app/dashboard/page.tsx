@@ -8,7 +8,7 @@ export default async function DashboardPage() {
   const session = await getServerSession(authOptions)
   if (!session) redirect('/signin')
 
-  const gmailConnected = session.gmailConnected ?? false
+  const gmailStatus = session.gmailStatus ?? 'disconnected'
 
   return (
     <main className="min-h-screen bg-[#050505] flex flex-col items-center justify-center px-6 gap-6">
@@ -26,7 +26,7 @@ export default async function DashboardPage() {
       <div className="border border-white/8 rounded-2xl p-8 max-w-sm w-full text-center space-y-4">
         <p className="text-xs tracking-widest uppercase text-[#555]">Gmail</p>
 
-        {gmailConnected ? (
+        {gmailStatus === 'connected' ? (
           <>
             <p className="text-[#f8f8f8] font-medium flex items-center justify-center gap-2">
               <span className="w-2 h-2 rounded-full bg-emerald-400 inline-block" />
@@ -37,6 +37,22 @@ export default async function DashboardPage() {
               className="inline-block px-6 py-2.5 text-sm rounded-full bg-[#f8f8f8] text-[#050505] font-medium hover:bg-white transition-colors duration-200"
             >
               Open Inbox Analysis
+            </Link>
+          </>
+        ) : gmailStatus === 'needs_reconnect' ? (
+          <>
+            <p className="text-amber-400/80 text-sm font-medium flex items-center justify-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-amber-400 inline-block" />
+              Gmail access expired
+            </p>
+            <p className="text-[#555] text-xs leading-relaxed">
+              Your session expired. Reconnect to restore inbox intelligence.
+            </p>
+            <Link
+              href="/connect"
+              className="inline-block px-6 py-2.5 text-sm rounded-full border border-amber-400/30 text-amber-400/80 hover:bg-amber-400/6 transition-all duration-200"
+            >
+              Reconnect Gmail
             </Link>
           </>
         ) : (

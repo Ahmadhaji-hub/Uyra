@@ -37,7 +37,9 @@ export default function InboxPage() {
   useEffect(() => {
     if (status === 'loading') return
     if (!session) { router.push('/signin'); return }
-    if (!session.gmailConnected) { router.push('/connect'); return }
+    // Any non-connected state routes to /connect.
+    // The connect page renders the correct variant for each state.
+    if (session.gmailStatus !== 'connected') { router.push('/connect'); return }
 
     async function fetchAnalysis() {
       try {
@@ -46,13 +48,16 @@ export default function InboxPage() {
 
         if (!res.ok) {
           if (data.code === 'TOKEN_EXPIRED') {
-            // Access token hard-expired and no refresh token — full re-auth
+            // Hard-expired with no usable refresh token — full re-auth
             await signIn('google', { callbackUrl: '/inbox' })
             return
           }
-          if (data.code === 'REFRESH_ERROR') {
-            // Refresh token revoked (user revoked app access in Google settings,
-            // or token was invalidated). Send back through Gmail connect flow.
+          if (
+            data.code === 'GMAIL_NEEDS_RECONNECT' ||
+            data.code === 'GMAIL_NOT_CONNECTED'
+          ) {
+            // Refresh token revoked or Gmail never connected —
+            // route to /connect which renders the correct variant.
             router.push('/connect')
             return
           }

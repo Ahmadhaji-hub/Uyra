@@ -10,8 +10,13 @@ export default async function ConnectPage() {
   // Not signed in — middleware handles this, but guard here too
   if (!session) redirect('/signin')
 
-  // Already connected — nothing to do
-  if (session.gmailConnected) redirect('/dashboard')
+  // ── Connection state routing ───────────────────────────────────────────────
+  // 'connected'       → nothing to do here, send to dashboard
+  // 'disconnected'    → show standard connect flow
+  // 'needs_reconnect' → show reconnect variant (DO NOT redirect — that's the loop)
+  if (session.gmailStatus === 'connected') redirect('/dashboard')
+
+  const isReconnect = session.gmailStatus === 'needs_reconnect'
 
   return (
     <main className="min-h-screen bg-[#050505] flex flex-col items-center justify-center px-6">
@@ -21,15 +26,24 @@ export default async function ConnectPage() {
         Uyra
       </p>
 
-      {/* Headline */}
+      {/* Headline — reconnect variant */}
       <h1 className="text-[clamp(1.8rem,4vw,3rem)] font-semibold tracking-[-0.04em] text-[#f8f8f8] text-center leading-tight mb-4">
-        Connect your Gmail
+        {isReconnect ? 'Reconnect your Gmail' : 'Connect your Gmail'}
       </h1>
 
       <p className="text-[#555] text-base text-center mb-3 max-w-sm leading-relaxed">
-        Uyra will read your inbox to identify who matters,
-        what&apos;s active, and what needs a reply.
+        {isReconnect
+          ? 'Your Gmail access has expired. Reconnect to restore inbox intelligence.'
+          : 'Uyra will read your inbox to identify who matters, what\'s active, and what needs a reply.'
+        }
       </p>
+
+      {/* Reconnect notice */}
+      {isReconnect && (
+        <p className="text-xs text-amber-400/60 text-center mb-3 max-w-xs">
+          Your history and data are preserved — this only refreshes access.
+        </p>
+      )}
 
       {/* What access means */}
       <div className="mb-12 space-y-2 text-center">

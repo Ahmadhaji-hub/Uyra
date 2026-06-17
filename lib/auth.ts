@@ -1,6 +1,9 @@
 import type { NextAuthOptions } from 'next-auth'
 import type { JWT } from 'next-auth/jwt'
 import GoogleProvider from 'next-auth/providers/google'
+import type { GmailStatus } from '@/types/next-auth'
+
+const GMAIL_SCOPE = 'https://www.googleapis.com/auth/gmail.readonly'
 
 // ── Token refresh ─────────────────────────────────────────────────────────────
 
@@ -8,9 +11,9 @@ import GoogleProvider from 'next-auth/providers/google'
  * Exchange a stored refresh token for a fresh access token by calling
  * Google's token endpoint directly.
  *
- * Returns the updated token on success.
- * On failure, returns the original token with error = 'RefreshAccessTokenError'
- * so callers can surface a reconnect prompt rather than silently failing.
+ * On success  → returns updated token with gmailStatus: 'connected'
+ * On failure  → returns token with gmailStatus: 'needs_reconnect'
+ *               (refresh token revoked, scopes changed, or network error)
  */
 async function refreshAccessToken(token: JWT): Promise<JWT> {
   try {
@@ -35,14 +38,16 @@ async function refreshAccessToken(token: JWT): Promise<JWT> {
       accessTokenExpires: Date.now() + refreshed.expires_in * 1000,
       // Google only rotates the refresh token occasionally — keep the old one
       // if no new one was issued
-      refreshToken: refreshed.refresh_token ?? token.refreshToken,
-      error:        undefined,
+      refreshToken:  refreshed.refresh_token ?? token.refreshToken,
+      gmailStatus:   'connected' as GmailStatus,
     }
   } catch (err) {
     console.error('[auth] Token refresh failed:', err)
+    // Signal to the session that the user must re-grant Gmail access.
+    // The connect page will render a "reconnect" variant for this state.
     return {
       ...token,
-      error: 'RefreshAccessTokenError',
+      gmailStatus: 'needs_reconnect' as GmailStatus,
     }
   }
 }
@@ -66,25 +71,22 @@ export const authOptions: NextAuthOptions = {
 
   callbacks: {
     async jwt({ token, account }) {
-      // ── First sign-in OR Gmail connect ────────────────────────────────────
-      // `account` is only populated on the initial OAuth callback for each
-      // sign-in / incremental-auth flow.
+      // ── First sign-in OR Gmail connect callback ───────────────────────────
+      // `account` is populated only on the initial OAuth callback for each
+      // sign-in / incremental-auth flow. Derive gmailStatus from the scopes
+      // returned — don't preserve the previous value, because the new tokens
+      // may cover different scopes than the previous session.
       if (account) {
+        const hasGmail = account.scope?.includes(GMAIL_SCOPE) ?? false
         return {
           ...token,
-          accessToken:    account.access_token,
-          // Keep the old refresh token if Google didn't issue a new one
-          refreshToken:   account.refresh_token ?? token.refreshToken,
+          accessToken:        account.access_token,
+          refreshToken:       account.refresh_token ?? token.refreshToken,
           // Google's expires_at is in UNIX seconds — convert to ms
           accessTokenExpires: account.expires_at
             ? account.expires_at * 1000
-            : Date.now() + 3600 * 1000,   // fallback: 1 hour
-          // Once gmailConnected is true it stays true until sign-out
-          gmailConnected: account.scope?.includes(
-            'https://www.googleapis.com/auth/gmail.readonly'
-          )
-            ? true
-            : (token.gmailConnected ?? false),
+            : Date.now() + 3600 * 1000,
+          gmailStatus: (hasGmail ? 'connected' : 'disconnected') as GmailStatus,
         }
       }
 
@@ -96,14 +98,13 @@ export const authOptions: NextAuthOptions = {
       }
 
       // ── Access token expired — attempt silent refresh ─────────────────────
+      // refreshAccessToken sets gmailStatus: 'needs_reconnect' on failure.
       return refreshAccessToken(token)
     },
 
     async session({ session, token }) {
-      session.accessToken    = token.accessToken    as string | undefined
-      session.gmailConnected = token.gmailConnected as boolean ?? false
-      // Propagate any refresh error so the API route can surface it
-      session.error          = token.error          as string | undefined
+      session.accessToken = token.accessToken as string | undefined
+      session.gmailStatus = (token.gmailStatus ?? 'disconnected') as GmailStatus
       return session
     },
   },

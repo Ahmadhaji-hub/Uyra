@@ -11,17 +11,23 @@ export async function GET() {
     return NextResponse.json({ error: 'Not authenticated' }, { status: 401 })
   }
 
-  // Silent token refresh failed — refresh token is revoked or expired.
-  // Tell the client to send the user back through the Gmail connect flow.
-  if (session.error === 'RefreshAccessTokenError') {
+  // ── Gmail connection state gate ───────────────────────────────────────────
+  // 'needs_reconnect' — refresh token revoked or scopes changed; user must
+  //   re-grant via the connect page. Return 401 so the client routes there.
+  // 'disconnected'    — user has never connected Gmail. Return 403.
+  // 'connected'       — access token is valid, proceed.
+  if (session.gmailStatus === 'needs_reconnect') {
     return NextResponse.json(
-      { error: 'Unable to refresh access. Please reconnect Gmail.', code: 'REFRESH_ERROR' },
+      { error: 'Gmail access expired. Please reconnect.', code: 'GMAIL_NEEDS_RECONNECT' },
       { status: 401 }
     )
   }
 
-  if (!session.gmailConnected) {
-    return NextResponse.json({ error: 'Gmail not connected' }, { status: 403 })
+  if (session.gmailStatus !== 'connected') {
+    return NextResponse.json(
+      { error: 'Gmail not connected.', code: 'GMAIL_NOT_CONNECTED' },
+      { status: 403 }
+    )
   }
 
   if (!session.accessToken) {
