@@ -6,5 +6,6 @@ export const config = {
     '/connecting/:path*',
     '/connect/:path*',
     '/inbox/:path*',
+    '/memory/:path*',
   ],
 }

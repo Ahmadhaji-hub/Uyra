@@ -38,6 +38,12 @@ export default async function DashboardPage() {
             >
               Open Inbox Analysis
             </Link>
+            <Link
+              href="/memory"
+              className="inline-block px-6 py-2.5 text-sm rounded-full border border-white/12 text-[#888] hover:text-[#f8f8f8] hover:border-white/20 transition-all duration-200"
+            >
+              Memory Inspector
+            </Link>
           </>
         ) : gmailStatus === 'needs_reconnect' ? (
           <>
