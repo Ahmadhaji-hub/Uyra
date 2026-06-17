@@ -3,6 +3,9 @@
 import { motion, useInView } from 'framer-motion'
 import Link from 'next/link'
 import { useRef } from 'react'
+import dynamic from 'next/dynamic'
+
+const ParticleOrb = dynamic(() => import('@/components/ParticleOrb'), { ssr: false })
 
 function Section({
   index,
@@ -118,7 +121,12 @@ export default function ManifestPage() {
       </header>
 
       {/* Hero */}
-      <div ref={heroRef} className="px-6 md:px-12 pt-28 pb-24 border-b border-white/5">
+      <div ref={heroRef} className="relative px-6 md:px-12 pt-28 pb-24 border-b border-white/5 overflow-hidden">
+
+        {/* Particle orb — background */}
+        <div className="absolute inset-0 pointer-events-none opacity-50">
+          <ParticleOrb />
+        </div>
         <motion.p
           className="text-xs tracking-widest uppercase text-[#555] mb-8"
           initial={{ opacity: 0 }}
@@ -147,7 +155,8 @@ export default function ManifestPage() {
         >
           A trusted digital extension of themselves.
         </motion.p>
-      </div>
+
+      </div>{/* end hero */}
 
       {/* Sections */}
       <div className="max-w-7xl">
