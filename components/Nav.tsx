@@ -1,6 +1,7 @@
 'use client'
 
 import { motion, useScroll, useTransform } from 'framer-motion'
+import Link from 'next/link'
 
 export default function Nav() {
   const { scrollY } = useScroll()
@@ -23,6 +24,18 @@ export default function Nav() {
         className="absolute bottom-0 left-0 right-0 h-px bg-white"
         style={{ opacity: borderOpacity }}
       />
+      {/* Mobile secondary row */}
+      <motion.div
+        className="relative flex md:hidden items-center justify-center gap-6 text-xs text-[#555] pb-2"
+        initial={{ opacity: 0 }}
+        animate={{ opacity: 1 }}
+        transition={{ duration: 0.6, delay: 0.15 }}
+      >
+        <a href="#how-it-works" className="hover:text-[#f8f8f8] transition-colors duration-200">How it works</a>
+        <a href="#future" className="hover:text-[#f8f8f8] transition-colors duration-200">Vision</a>
+        <Link href="/manifest" className="hover:text-[#f8f8f8] transition-colors duration-200">Manifest</Link>
+      </motion.div>
+
       <div className="relative max-w-7xl mx-auto flex items-center justify-between h-16 md:h-20">
         <motion.a
           href="#"
@@ -42,6 +55,7 @@ export default function Nav() {
         >
           <a href="#how-it-works" className="hover:text-[#f8f8f8] transition-colors duration-200">How it works</a>
           <a href="#future" className="hover:text-[#f8f8f8] transition-colors duration-200">Vision</a>
+          <Link href="/manifest" className="hover:text-[#f8f8f8] transition-colors duration-200">Manifest</Link>
         </motion.div>
 
         <motion.a
