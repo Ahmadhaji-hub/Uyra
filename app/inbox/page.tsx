@@ -3,7 +3,7 @@
 import { useState, useEffect } from 'react'
 import { useSession, signIn } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
-import type { InboxAnalysis } from '@/types/inbox'
+import type { InboxAnalysis, Person, RelationshipStatus } from '@/types/inbox'
 
 const STATUS_MESSAGES = [
   'Reading your inbox…',
@@ -16,9 +16,9 @@ export default function InboxPage() {
   const { data: session, status } = useSession()
   const router = useRouter()
 
-  const [analysis, setAnalysis]   = useState<InboxAnalysis | null>(null)
-  const [loading,  setLoading]    = useState(true)
-  const [error,    setError]      = useState<string | null>(null)
+  const [analysis,  setAnalysis]  = useState<InboxAnalysis | null>(null)
+  const [loading,   setLoading]   = useState(true)
+  const [error,     setError]     = useState<string | null>(null)
   const [statusIdx, setStatusIdx] = useState(0)
 
   // Cycle loading messages
@@ -73,7 +73,7 @@ export default function InboxPage() {
             />
           ))}
         </div>
-        <p className="text-[#555] text-sm tracking-wide transition-all duration-500">
+        <p className="text-[#555] text-sm tracking-wide">
           {STATUS_MESSAGES[statusIdx]}
         </p>
       </main>
@@ -115,28 +115,14 @@ export default function InboxPage() {
         <section>
           <SectionHeader
             label="Important People"
-            description="Ranked by how often they appear in your inbox"
+            description="Ranked by human signal — two-way conversations, recency, and interaction depth"
           />
           {analysis.people.length === 0 ? (
-            <Empty text="No senders found" />
+            <Empty text="No human contacts detected in the last 100 threads" />
           ) : (
             <ul className="space-y-2">
               {analysis.people.map((p, i) => (
-                <li
-                  key={p.email}
-                  className="flex items-center justify-between border border-white/8 rounded-xl px-5 py-3.5 gap-4"
-                >
-                  <div className="flex items-center gap-3 min-w-0">
-                    <span className="text-[#333] text-xs w-4 shrink-0 text-right">{i + 1}</span>
-                    <div className="min-w-0">
-                      <p className="text-[#f8f8f8] text-sm font-medium truncate">{p.name}</p>
-                      <p className="text-[#555] text-xs truncate">{p.email}</p>
-                    </div>
-                  </div>
-                  <span className="text-[#555] text-xs shrink-0">
-                    {p.count} {p.count === 1 ? 'email' : 'emails'}
-                  </span>
-                </li>
+                <PersonRow key={p.email} person={p} rank={i + 1} />
               ))}
             </ul>
           )}
@@ -210,6 +196,98 @@ export default function InboxPage() {
     </main>
   )
 }
+
+// ── Person Row ────────────────────────────────────────────────────────────────
+
+function PersonRow({ person, rank }: { person: Person; rank: number }) {
+  return (
+    <li className="border border-white/8 rounded-xl px-5 py-4 gap-4 space-y-2.5">
+      {/* Top row: rank + name + relationship badge */}
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-3 min-w-0">
+          <span className="text-[#333] text-xs w-4 shrink-0 text-right">{rank}</span>
+          <div className="min-w-0">
+            <p className="text-[#f8f8f8] text-sm font-medium truncate">{person.name}</p>
+            <p className="text-[#555] text-xs truncate">{person.email}</p>
+          </div>
+        </div>
+        <RelationshipBadge status={person.relationship} twoWay={person.twoWay} />
+      </div>
+
+      {/* Score bar + confidence */}
+      <div className="pl-7 space-y-1.5">
+        <div className="flex items-center justify-between">
+          <span className="text-[#444] text-xs">Human signal</span>
+          <span className="text-[#f8f8f8] text-xs font-medium tabular-nums">
+            {person.score}
+            <span className="text-[#444]">/100</span>
+          </span>
+        </div>
+        <div className="h-px bg-white/6 rounded-full overflow-hidden">
+          <div
+            className="h-full rounded-full transition-all duration-700"
+            style={{
+              width:      `${person.score}%`,
+              background: scoreColor(person.score),
+            }}
+          />
+        </div>
+        <p className="text-[#333] text-xs">
+          {person.threadCount} {person.threadCount === 1 ? 'thread' : 'threads'} ·{' '}
+          {person.messageCount} {person.messageCount === 1 ? 'message' : 'messages'} ·{' '}
+          {person.confidence}% confidence
+        </p>
+      </div>
+    </li>
+  )
+}
+
+// ── Relationship Badge ────────────────────────────────────────────────────────
+
+const BADGE_STYLES: Record<RelationshipStatus, string> = {
+  frequent: 'bg-[#f8f8f8]/8 text-[#f8f8f8] border border-white/12',
+  active:   'bg-emerald-400/8 text-emerald-400 border border-emerald-400/20',
+  dormant:  'bg-white/3 text-[#444] border border-white/6',
+}
+
+const BADGE_LABELS: Record<RelationshipStatus, string> = {
+  frequent: 'Frequent',
+  active:   'Active',
+  dormant:  'Dormant',
+}
+
+function RelationshipBadge({
+  status,
+  twoWay,
+}: {
+  status: RelationshipStatus
+  twoWay: boolean
+}) {
+  return (
+    <div className="flex items-center gap-1.5 shrink-0">
+      {twoWay && (
+        <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-[#9b8fff]/10 text-[#9b8fff] border border-[#9b8fff]/20 tracking-wide uppercase">
+          2-way
+        </span>
+      )}
+      <span
+        className={`text-[10px] px-2 py-0.5 rounded-full tracking-wide uppercase ${BADGE_STYLES[status]}`}
+      >
+        {BADGE_LABELS[status]}
+      </span>
+    </div>
+  )
+}
+
+// ── Score color (green → amber → muted) ──────────────────────────────────────
+
+function scoreColor(score: number): string {
+  if (score >= 70) return 'rgba(52,211,153,0.7)'   // emerald
+  if (score >= 45) return 'rgba(251,191,36,0.6)'    // amber
+  return 'rgba(255,255,255,0.15)'                    // muted
+}
+
+// ── Shared sub-components ─────────────────────────────────────────────────────
 
 function SectionHeader({ label, description }: { label: string; description: string }) {
   return (

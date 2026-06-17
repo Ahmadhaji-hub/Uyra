@@ -1,7 +1,14 @@
+export type RelationshipStatus = 'frequent' | 'active' | 'dormant'
+
 export interface Person {
-  name:  string
-  email: string
-  count: number
+  name:         string
+  email:        string
+  messageCount: number
+  threadCount:  number
+  score:        number             // 0–100 human signal score
+  confidence:   number             // 0–100 confidence in the score
+  relationship: RelationshipStatus
+  twoWay:       boolean            // user sent to this person in at least one shared thread
 }
 
 export interface Topic {

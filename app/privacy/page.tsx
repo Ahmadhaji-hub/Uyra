@@ -1,4 +1,5 @@
 import Link from 'next/link'
+import type { ReactNode } from 'react'
 
 export const metadata = {
   title: 'Privacy Policy — Uyra',
@@ -126,7 +127,7 @@ export default function PrivacyPage() {
   )
 }
 
-function Section({ title, children }: { title: string; children: React.ReactNode }) {
+function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="space-y-3">
       <h2 className="text-[#f8f8f8] text-sm font-semibold tracking-tight">{title}</h2>
