@@ -56,8 +56,19 @@ export async function POST(req: NextRequest) {
   // ── Read + update memory ─────────────────────────────────────────────────────
   try {
     const supabase = createServerSupabaseClient()
-    const existing = await readMemoryContext(supabase, userId)
-    await updateMemory(supabase, userId, analysis, existing)
+    const read     = await readMemoryContext(supabase, userId)
+
+    // Refuse to write on an untrustworthy baseline: deriving counters from a
+    // partial read and upserting would destructively reset accumulated history.
+    if (!read.ok) {
+      console.warn('[api/memory/update] Skipping write — baseline read was not trustworthy')
+      return NextResponse.json(
+        { error: 'Memory baseline unavailable — update skipped to protect history.' },
+        { status: 503 },
+      )
+    }
+
+    await updateMemory(supabase, userId, analysis, read.context)
     return NextResponse.json({ ok: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : 'Memory update failed'

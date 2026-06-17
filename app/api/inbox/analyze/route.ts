@@ -85,15 +85,21 @@ export async function GET() {
   }
 
   // ── 3. Read memory context ───────────────────────────────────────────────────
-  // Memory read errors are non-fatal: fall back to empty context so priorities
-  // are still generated (without historical enrichment).
+  // Memory read errors are non-fatal for PRIORITIES: fall back to empty context
+  // so priorities are still generated (without historical enrichment).
+  // `memoryReadOk` tracks whether the baseline is trustworthy enough to WRITE.
+  // A partial/failed read must NOT be used as a write baseline — see step 5.
   let memoryContext
+  let memoryReadOk = false
   try {
     const supabase = createServerSupabaseClient()
-    memoryContext  = await readMemoryContext(supabase, userId)
+    const read     = await readMemoryContext(supabase, userId)
+    memoryContext  = read.context
+    memoryReadOk   = read.ok
   } catch (err) {
     console.error('[inbox/analyze] Memory read failed (non-fatal):', err)
     memoryContext = { persons: [], topics: [], buckets: [], decisions: [] }
+    memoryReadOk  = false
   }
 
   // ── 4. Generate memory-aware priorities (server-side) ───────────────────────
@@ -124,11 +130,21 @@ export async function GET() {
   // ── 5. Update memory tables (non-blocking on failure) ───────────────────────
   // Runs after priorities so memory latency does not affect this response.
   // Errors are logged but never surfaced to the client.
-  try {
-    const supabase = createServerSupabaseClient()
-    await updateMemory(supabase, userId, analysis, memoryContext)
-  } catch (err) {
-    console.error('[inbox/analyze] Memory update failed (non-fatal):', err)
+  //
+  // Guard: only write when the baseline read was trustworthy. On a failed/partial
+  // read the existing context is empty for the wrong reason, and the writer's
+  // destructive upserts would reset accumulated history (EMA, score samples,
+  // times_seen, two-way counts). Skipping one run's update is fully recoverable;
+  // clobbering history is not.
+  if (memoryReadOk) {
+    try {
+      const supabase = createServerSupabaseClient()
+      await updateMemory(supabase, userId, analysis, memoryContext)
+    } catch (err) {
+      console.error('[inbox/analyze] Memory update failed (non-fatal):', err)
+    }
+  } else {
+    console.warn('[inbox/analyze] Skipping memory update — baseline read was not trustworthy')
   }
 
   // ── 6. Return combined result ────────────────────────────────────────────────

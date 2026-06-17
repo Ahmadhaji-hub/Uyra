@@ -22,19 +22,38 @@ import type {
 // How many weeks of bucket history to load for relationship-decay detection
 const WEEKS_BACK = 12
 
+// ── Read result ───────────────────────────────────────────────────────────────
+
+/**
+ * Result of a memory read.
+ *
+ * `ok` is the trustworthiness flag for the baseline:
+ *   true  — every table query succeeded (context may legitimately be empty for
+ *           a brand-new user; that is still a trustworthy baseline)
+ *   false — at least one query errored, so the context is partial. Callers that
+ *           WRITE memory must NOT proceed on ok=false: deriving EMA / samples /
+ *           times_seen from a partial baseline and upserting would destructively
+ *           reset accumulated history. Read-only callers may use the context as-is.
+ */
+export interface MemoryReadResult {
+  context: MemoryContext
+  ok:      boolean
+}
+
 // ── Public entry point ────────────────────────────────────────────────────────
 
 /**
  * Fetch the complete memory context for `userId` in a single parallel
  * round-trip (4 concurrent Supabase queries).
  *
- * Returns empty arrays on any per-query error — callers always get a valid
- * MemoryContext shape and memory failures never surface to the user.
+ * Never throws for per-query errors — callers always get a valid MemoryContext
+ * shape (empty arrays for any failed table). The `ok` flag reports whether the
+ * baseline is complete; write-path callers must gate updates on it.
  */
 export async function readMemoryContext(
   supabase: ServerSupabaseClient,
   userId:   string,
-): Promise<MemoryContext> {
+): Promise<MemoryReadResult> {
   const weekCutoff = getWeeksAgoDate(WEEKS_BACK)
 
   const [personsRes, topicsRes, bucketsRes, decisionsRes] = await Promise.all([
@@ -66,11 +85,23 @@ export async function readMemoryContext(
   if (bucketsRes.error)   console.error('[memory-reader] buckets:',   bucketsRes.error.message)
   if (decisionsRes.error) console.error('[memory-reader] decisions:', decisionsRes.error.message)
 
+  // Baseline is trustworthy only if EVERY table query succeeded. A single
+  // failed query means the corresponding context array is empty for the wrong
+  // reason — writers must not derive a fresh baseline from it.
+  const ok =
+    !personsRes.error &&
+    !topicsRes.error &&
+    !bucketsRes.error &&
+    !decisionsRes.error
+
   return {
-    persons:   (personsRes.data   ?? []).map(mapPerson),
-    topics:    (topicsRes.data    ?? []).map(mapTopic),
-    buckets:   (bucketsRes.data   ?? []).map(mapBucket),
-    decisions: (decisionsRes.data ?? []).map(mapDecision),
+    ok,
+    context: {
+      persons:   (personsRes.data   ?? []).map(mapPerson),
+      topics:    (topicsRes.data    ?? []).map(mapTopic),
+      buckets:   (bucketsRes.data   ?? []).map(mapBucket),
+      decisions: (decisionsRes.data ?? []).map(mapDecision),
+    },
   }
 }
 

@@ -21,6 +21,7 @@ import type {
   MemoryContext,
   PersonMemoryRecord,
   TopicMemoryRecord,
+  WeeklyBucketRecord,
   DecisionMemoryRecord,
 } from '@/types/memory'
 import type { InboxAnalysis, Person } from '@/types/inbox'
@@ -53,7 +54,7 @@ export async function updateMemory(
   const ops: WriteOp[] = [
     () => upsertPersonMemory(supabase, userId, analysis.people, existingContext.persons, now),
     () => upsertTopicMemory(supabase, userId, analysis.topics, existingContext.topics, now),
-    () => upsertWeeklyBuckets(supabase, userId, analysis.people, weekStart),
+    () => upsertWeeklyBuckets(supabase, userId, analysis.people, existingContext.buckets, weekStart),
     () => upsertDecisionMemory(supabase, userId, analysis, existingContext.decisions, now),
   ]
 
@@ -194,31 +195,53 @@ async function upsertTopicMemory(
 }
 
 // ── relationship_weekly_buckets ───────────────────────────────────────────────
-// Upsert uses GREATEST semantics: within a week, counts only increase.
-// Running analysis twice in a week always reflects the larger of the two
-// snapshots — the later analysis will have seen at least as many threads.
+// Monotonic within a week: counts never regress and two_way never flips back to
+// false. The Gmail analysis window (most-recent 100 threads) slides over time,
+// so a later run in the same week can legitimately report FEWER threads for a
+// person, or miss the user's sent message and see twoWay=false. A plain upsert
+// would let those losses overwrite a higher earlier value — corrupting the
+// weekly time-series used for relationship-decay detection.
+//
+// We compute GREATEST(existing, current) / (existing OR current) in-app against
+// the baseline buckets read this run (existingBuckets), consistent with how the
+// rest of the writer does read-modify-write (EMA, samples, times_seen). This is
+// safe because the caller only writes when the baseline read succeeded; fully
+// race-proof monotonicity under concurrent runs would require a DB-side GREATEST
+// upsert (deferred with the concurrency item).
 
 async function upsertWeeklyBuckets(
-  supabase:   ServerSupabaseClient,
-  userId:     string,
-  people:     Person[],
-  weekStart:  string,
+  supabase:        ServerSupabaseClient,
+  userId:          string,
+  people:          Person[],
+  existingBuckets: WeeklyBucketRecord[],
+  weekStart:       string,
 ): Promise<void> {
   if (people.length === 0) return
 
-  const rows = people.map(person => ({
-    user_id:      userId,
-    person_email: person.email.toLowerCase(),
-    week_start:   weekStart,
-    thread_count: person.threadCount,
-    message_count: person.messageCount,
-    two_way:      person.twoWay,
-  }))
+  // Index this week's existing rows by person email for O(1) GREATEST lookup.
+  const existingThisWeek = new Map<string, WeeklyBucketRecord>()
+  for (const b of existingBuckets) {
+    if (b.weekStart === weekStart) {
+      existingThisWeek.set(b.personEmail.toLowerCase(), b)
+    }
+  }
 
-  // Supabase upsert with ignoreDuplicates=false replaces on conflict.
-  // To get GREATEST semantics we use a raw RPC approach — but for V1 simplicity
-  // we use a plain upsert and accept that the latest run's counts win within
-  // a week (analysis always covers the same 100 threads, so later = same or more).
+  const rows = people.map(person => {
+    const key  = person.email.toLowerCase()
+    const prev = existingThisWeek.get(key)
+
+    return {
+      user_id:       userId,
+      person_email:  key,
+      week_start:    weekStart,
+      // Monotonic: keep the larger of the prior and current snapshot.
+      thread_count:  prev ? Math.max(prev.threadCount,  person.threadCount)  : person.threadCount,
+      message_count: prev ? Math.max(prev.messageCount, person.messageCount) : person.messageCount,
+      // two_way is OR-accumulated within the week — once true, stays true.
+      two_way:       prev ? (prev.twoWay || person.twoWay) : person.twoWay,
+    }
+  })
+
   const { error } = await supabase
     .from('relationship_weekly_buckets')
     .upsert(rows, { onConflict: 'user_id,person_email,week_start' })
@@ -247,8 +270,16 @@ async function upsertDecisionMemory(
   )
 
   const rows = decisionItems.map(item => {
-    const mem       = existingMap.get(item.threadId)
-    const fromEmail = findPersonEmail(item.from, analysis.people)
+    const mem = existingMap.get(item.threadId)
+
+    // Identity resolution: prefer the exact sender email from the message header
+    // (NeedsReplyItem.fromEmail — the stable dedup key). Only fall back to the
+    // fuzzy display-name matcher when the header email is unusable (no '@'),
+    // which avoids attaching the wrong person to a decision.
+    const fromEmail =
+      item.fromEmail && item.fromEmail.includes('@')
+        ? item.fromEmail.toLowerCase()
+        : findPersonEmail(item.from, analysis.people)
 
     return {
       user_id:           userId,

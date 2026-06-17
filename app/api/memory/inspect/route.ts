@@ -37,10 +37,13 @@ export async function GET() {
 
   // ── 2. Read memory context ───────────────────────────────────────────────────
   // Non-fatal: empty context returned on any Supabase error.
+  // Read-only inspector: the `ok` flag is irrelevant here (we never write),
+  // so a partial read simply renders whatever is available.
   let context
   try {
     const supabase = createServerSupabaseClient()
-    context = await readMemoryContext(supabase, userId)
+    const read = await readMemoryContext(supabase, userId)
+    context = read.context
   } catch (err) {
     console.error('[memory/inspect] readMemoryContext failed:', err)
     context = { persons: [], topics: [], buckets: [], decisions: [] }
