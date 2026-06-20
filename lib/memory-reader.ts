@@ -120,6 +120,12 @@ function mapPerson(row: any): PersonMemoryRecord {
     lastScore:        row.last_score,
     avgScore:         row.avg_score,
     scoreSamples:     row.score_samples ?? [],
+    // V1.5 — default-safe for legacy (pre-migration) rows
+    inboundCount:        row.inbound_count ?? 0,
+    outboundCount:       row.outbound_count ?? 0,
+    replyCount:          row.reply_count ?? 0,
+    avgReplyLatencySec:  row.avg_reply_latency_sec ?? null,   // null = unknown (preserved, not 0)
+    replyLatencySamples: row.reply_latency_samples ?? [],
     firstSeenAt:      row.first_seen_at,
     lastSeenAt:       row.last_seen_at,
     lastAnalysisAt:   row.last_analysis_at,
@@ -153,6 +159,9 @@ function mapBucket(row: any): WeeklyBucketRecord {
     threadCount:  row.thread_count,
     messageCount: row.message_count,
     twoWay:       row.two_way,
+    // V1.5 — default-safe for legacy rows
+    inboundCount:  row.inbound_count ?? 0,
+    outboundCount: row.outbound_count ?? 0,
   }
 }
 

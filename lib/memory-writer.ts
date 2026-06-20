@@ -96,6 +96,21 @@ function delay(ms: number): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+/**
+ * Median of a numeric list, rounded to an integer. Returns null for an empty
+ * list — the "no reply observed this run" signal that keeps the latency EMA
+ * unchanged (absence must never be folded in as 0).
+ */
+function median(values: number[]): number | null {
+  if (values.length === 0) return null
+  const sorted = [...values].sort((a, b) => a - b)
+  const mid    = Math.floor(sorted.length / 2)
+  const m = sorted.length % 2 === 0
+    ? (sorted[mid - 1] + sorted[mid]) / 2
+    : sorted[mid]
+  return Math.round(m)
+}
+
 // ── person_memory ─────────────────────────────────────────────────────────────
 
 async function upsertPersonMemory(
@@ -131,6 +146,28 @@ async function upsertPersonMemory(
       ? (person.twoWay ? mem.twoWayCount + 1 : mem.twoWayCount)
       : (person.twoWay ? 1 : 0)
 
+    // ── Reply latency (V1.5) ───────────────────────────────────────────────
+    // One representative value per run (median of this run's paired latencies)
+    // folded into an EMA mirroring avg_score. STRICT NULL DISCIPLINE: a run with
+    // no replies must NOT decay the EMA toward 0 — absence ≠ fast. null = unknown.
+    const runMedianLatency = median(person.replyLatenciesSec)   // null when no pairs
+    const priorLatency     = mem?.avgReplyLatencySec ?? null
+
+    let newAvgLatency: number | null
+    if (runMedianLatency !== null && priorLatency !== null) {
+      newAvgLatency = Math.round(priorLatency * 0.7 + runMedianLatency * 0.3)
+    } else if (runMedianLatency !== null) {
+      newAvgLatency = runMedianLatency
+    } else {
+      newAvgLatency = priorLatency   // unchanged (may remain null)
+    }
+
+    const newLatencySamples = runMedianLatency !== null
+      ? [...(mem?.replyLatencySamples ?? []), runMedianLatency].slice(-10)
+      : (mem?.replyLatencySamples ?? [])
+
+    const newReplyCount = (mem?.replyCount ?? 0) + person.replyLatenciesSec.length
+
     return {
       user_id:           userId,
       person_email:      key,
@@ -141,6 +178,13 @@ async function upsertPersonMemory(
       last_score:        currentScore,
       avg_score:         newAvgScore,
       score_samples:     newSamples,
+      // V1.5 directionality — latest snapshot (mirrors total_messages)
+      inbound_count:         person.inboundCount,
+      outbound_count:        person.outboundCount,
+      // V1.5 reply latency
+      reply_count:           newReplyCount,
+      avg_reply_latency_sec: newAvgLatency,        // null = unknown (never coerced to 0)
+      reply_latency_samples: newLatencySamples,
       last_seen_at:      now,
       last_analysis_at:  now,
       confidence:        person.confidence,
@@ -239,6 +283,9 @@ async function upsertWeeklyBuckets(
       message_count: prev ? Math.max(prev.messageCount, person.messageCount) : person.messageCount,
       // two_way is OR-accumulated within the week — once true, stays true.
       two_way:       prev ? (prev.twoWay || person.twoWay) : person.twoWay,
+      // V1.5 directionality — same monotonic-within-week GREATEST convention.
+      inbound_count:  prev ? Math.max(prev.inboundCount,  person.inboundCount)  : person.inboundCount,
+      outbound_count: prev ? Math.max(prev.outboundCount, person.outboundCount) : person.outboundCount,
     }
   })
 

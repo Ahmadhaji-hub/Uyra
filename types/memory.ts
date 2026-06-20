@@ -10,8 +10,13 @@
 
 // ── Algorithm versioning ──────────────────────────────────────────────────────
 
-/** Increment when scoring logic changes significantly. Stored on every row. */
-export const MEMORY_ALGORITHM_VERSION = 1
+/**
+ * Increment when scoring logic changes significantly. Stored on every row.
+ * v2 (Memory V1.5): adds reply-latency + inbound/outbound directionality.
+ * A version=2 row had the chance to observe these signals; a version=1 row
+ * never did (so reply_count=0 means "never measured", not "no replies").
+ */
+export const MEMORY_ALGORITHM_VERSION = 2
 
 // ── Row types ─────────────────────────────────────────────────────────────────
 
@@ -31,6 +36,15 @@ export interface PersonMemoryRecord {
   lastScore:        number
   avgScore:         number   // EMA (α=0.3), updated each analysis run
   scoreSamples:     number[] // last 10 raw scores
+
+  // Directionality (V1.5) — latest snapshot, mirrors totalMessages semantics
+  inboundCount:     number   // messages person→owner this run
+  outboundCount:    number   // messages owner→person this run
+
+  // Reply latency (V1.5)
+  replyCount:          number          // cumulative inbound→outbound pairs observed
+  avgReplyLatencySec:  number | null   // EMA (α=0.3) of latency; null = unknown (never 0)
+  replyLatencySamples: number[]        // last 10 per-run median latencies (seconds)
 
   // Timestamps
   firstSeenAt:      string   // ISO 8601 — never overwritten after first insert
@@ -68,6 +82,10 @@ export interface WeeklyBucketRecord {
   threadCount:  number
   messageCount: number
   twoWay:       boolean
+
+  // Directionality (V1.5) — weekly counts, monotonic-within-week (GREATEST)
+  inboundCount:  number   // messages person→owner this week
+  outboundCount: number   // messages owner→person this week
 }
 
 /** Tracked decision / pending approval. (decision_memory) */

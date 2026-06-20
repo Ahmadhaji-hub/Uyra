@@ -18,11 +18,48 @@ export async function analyzeInbox(
 ): Promise<InboxAnalysis> {
   const gmail = getGmailClient(accessToken)
 
+  // Resolve the owner's full sending-identity set (primary + send-as aliases)
+  // BEFORE classifying message direction. Authorized by gmail.readonly (V1.5).
+  const ownerIdentities = await resolveOwnerIdentities(gmail, userEmail)
+
   const listRes = await gmail.users.threads.list({ userId: 'me', maxResults: 100 })
   const refs    = listRes.data.threads ?? []
   const threads = await fetchInBatches(gmail, refs, 25)
 
-  return processThreads(threads, userEmail)
+  return processThreads(threads, userEmail, ownerIdentities)
+}
+
+// ─── Owner identity resolution (Memory V1.5) ──────────────────────────────────
+
+/**
+ * Build the set of email addresses that count as "the owner" for direction
+ * classification: the primary address plus every verified send-as alias.
+ *
+ * `users.settings.sendAs.list` is authorized by the gmail.readonly scope the
+ * app already holds (verified against Google's API reference). On any failure
+ * (missing scope at runtime, transient error) we degrade gracefully to the
+ * primary address only — directionality/latency for non-aliased owners (the
+ * common case) is unaffected; aliased owners get a conservative undercount of
+ * their own outbound rather than a misclassification.
+ */
+async function resolveOwnerIdentities(
+  gmail:     gmail_v1.Gmail,
+  userEmail: string,
+): Promise<Set<string>> {
+  const identities = new Set<string>([userEmail.toLowerCase()])
+  try {
+    const res = await gmail.users.settings.sendAs.list({ userId: 'me' })
+    for (const alias of res.data.sendAs ?? []) {
+      const email = alias.sendAsEmail?.toLowerCase()
+      if (email) identities.add(email)
+    }
+  } catch (err) {
+    console.warn(
+      '[gmail] sendAs.list failed; owner-identity set falls back to primary address only:',
+      (err as Error)?.message,
+    )
+  }
+  return identities
 }
 
 // ─── Fetch ────────────────────────────────────────────────────────────────────
@@ -51,6 +88,11 @@ async function fetchInBatches(
 
   return results
 }
+
+// ─── Memory V1.5 Constants ────────────────────────────────────────────────────
+
+/** Outlier ceiling for a single reply-latency sample (14 days, in seconds). */
+const MAX_REPLY_LATENCY_SEC = 14 * 24 * 60 * 60
 
 // ─── Scoring Constants ────────────────────────────────────────────────────────
 
@@ -174,18 +216,29 @@ interface PersonAccumulator {
   lastContactTimestamp: number      // Unix ms of the most recent message from this sender
   subjectSamples:       string[]    // raw subjects from threads they appear in (capped at 20)
   threadMessageCounts:  number[]    // message count per thread (one entry per thread)
+
+  // ── Memory V1.5 ──
+  inboundCount:         number      // messages person→owner (this run)
+  outboundCount:        number      // owner→person, attributed per thread (this run)
+  replyLatenciesSec:    number[]    // inbound→outbound latencies paired this run (seconds)
 }
 
 // ─── Analysis ─────────────────────────────────────────────────────────────────
 
 function processThreads(
-  threads:   gmail_v1.Schema$Thread[],
-  userEmail: string
+  threads:         gmail_v1.Schema$Thread[],
+  primaryEmail:    string,
+  ownerIdentities: Set<string>,
 ): InboxAnalysis {
   const peopleMap = new Map<string, PersonAccumulator>()
   const topicsMap = new Map<string, { display: string; count: number }>()
   const needsReply: NeedsReplyItem[] = []
-  const normalizedUser = userEmail.toLowerCase()
+
+  // V1 identity (single primary address) — drives ALL existing accumulation so
+  // V1 fields stay byte-identical. The alias-aware owner set is used ONLY for
+  // the new additive V1.5 signals below.
+  const normalizedUser = primaryEmail.toLowerCase()
+  const isOwner = (email: string): boolean => ownerIdentities.has(email.toLowerCase())
 
   for (const thread of threads) {
     const messages = thread.messages ?? []
@@ -193,22 +246,20 @@ function processThreads(
 
     const threadId = thread.id ?? String(Math.random())
 
-    // Did the user send any message in this thread?
+    // ── V1 per-person accumulation — PRIMARY identity only (unchanged) ───────
     const userSentInThread = messages.some(msg => {
       const fromRaw = getHeader(msg, 'From') ?? ''
       return parseFrom(fromRaw).email.toLowerCase() === normalizedUser
     })
 
-    // Accumulate data per unique non-user sender in this thread
     const sendersInThread = new Set<string>()
-
     for (const msg of messages) {
       const fromRaw         = getHeader(msg, 'From') ?? ''
       const { name, email } = parseFrom(fromRaw)
       if (email.toLowerCase() === normalizedUser) continue
 
       const key       = email.toLowerCase()
-      const timestamp = parseDateSafe(getHeader(msg, 'Date') ?? '')
+      const timestamp = parseDateStrict(getHeader(msg, 'Date') ?? '') ?? Date.now()
       sendersInThread.add(key)
 
       const existing = peopleMap.get(key)
@@ -216,9 +267,7 @@ function processThreads(
         existing.messageCount++
         existing.threadIds.add(threadId)
         if (userSentInThread) existing.twoWay = true
-        if (timestamp > existing.lastContactTimestamp) {
-          existing.lastContactTimestamp = timestamp
-        }
+        if (timestamp > existing.lastContactTimestamp) existing.lastContactTimestamp = timestamp
       } else {
         peopleMap.set(key, {
           name,
@@ -229,6 +278,9 @@ function processThreads(
           lastContactTimestamp: timestamp,
           subjectSamples:       [],
           threadMessageCounts:  [],
+          inboundCount:         0,
+          outboundCount:        0,
+          replyLatenciesSec:    [],
         })
       }
     }
@@ -242,6 +294,60 @@ function processThreads(
       if (!acc) continue
       if (acc.subjectSamples.length < 20) acc.subjectSamples.push(rawSubject)
       acc.threadMessageCounts.push(messages.length)
+    }
+
+    // ── V1.5 directionality + reply latency — ADDITIVE, alias-aware ──────────
+    // Computed independently of the V1 accumulation so no V1 field is touched.
+    // `owner` here is alias-aware (primary + send-as), so an owner-sent alias
+    // counts as outbound, not as a contact's inbound. `tsValid` gates latency
+    // pairing so an unparseable Date never fabricates a latency.
+    const classified = messages.map(msg => {
+      const { email } = parseFrom(getHeader(msg, 'From') ?? '')
+      const key    = email.toLowerCase()
+      const strict = parseDateStrict(getHeader(msg, 'Date') ?? '')
+      return { key, owner: isOwner(key), ts: strict ?? Date.now(), tsValid: strict !== null }
+    })
+    const ownerMsgCount = classified.filter(m => m.owner).length
+
+    // inbound (person→owner) per counterpart; outbound (owner→person) credited
+    // to each counterpart in the thread (exact 1:1; group threads credit each —
+    // the documented V1.5 attribution rule). Attributed only to persons the V1
+    // accumulation already tracks.
+    const inboundByPerson = new Map<string, number>()
+    for (const m of classified) {
+      if (!m.owner) inboundByPerson.set(m.key, (inboundByPerson.get(m.key) ?? 0) + 1)
+    }
+    for (const [key, inbound] of Array.from(inboundByPerson)) {
+      const acc = peopleMap.get(key)
+      if (!acc) continue
+      acc.inboundCount  += inbound
+      acc.outboundCount += ownerMsgCount
+    }
+
+    // Reply latency: walk chronologically; pair each owner message with the
+    // single most-recent unmatched inbound (nearest preceding) → one person,
+    // avoiding group-thread inflation. Each inbound matched once; deltas capped.
+    const ordered = [...classified].sort((a, b) => a.ts - b.ts)
+    const pending = new Map<string, number>()   // personKey → unmatched inbound ts (ms)
+    for (const m of ordered) {
+      if (m.owner) {
+        if (!m.tsValid) continue
+        let bestKey: string | null = null
+        let bestTs  = -Infinity
+        for (const [k, ts] of Array.from(pending)) {
+          if (ts <= m.ts && ts > bestTs) { bestTs = ts; bestKey = k }
+        }
+        if (bestKey !== null) {
+          const rawSec = (m.ts - bestTs) / 1000
+          if (rawSec >= 0) {
+            const acc = peopleMap.get(bestKey)
+            if (acc) acc.replyLatenciesSec.push(Math.round(Math.min(rawSec, MAX_REPLY_LATENCY_SEC)))
+          }
+          pending.delete(bestKey)
+        }
+      } else if (m.tsValid) {
+        pending.set(m.key, m.ts)   // refresh latest unmatched inbound for this person
+      }
     }
 
     // ── Active Topics ──────────────────────────────────────────────────────
@@ -276,14 +382,17 @@ function processThreads(
     .map(([, acc]) => {
       const { score, confidence, relationship } = computePersonScore(acc)
       return {
-        name:         acc.name,
-        email:        acc.email,
-        messageCount: acc.messageCount,
-        threadCount:  acc.threadIds.size,
+        name:              acc.name,
+        email:             acc.email,
+        messageCount:      acc.messageCount,
+        threadCount:       acc.threadIds.size,
         score,
         confidence,
         relationship,
-        twoWay:       acc.twoWay,
+        twoWay:            acc.twoWay,
+        inboundCount:      acc.inboundCount,
+        outboundCount:     acc.outboundCount,
+        replyLatenciesSec: acc.replyLatenciesSec,
       }
     })
     .filter(p => p.score > 0)
@@ -454,10 +563,16 @@ function cleanSubject(subject: string): string {
     .slice(0, 60)
 }
 
-function parseDateSafe(dateStr: string): number {
-  if (!dateStr) return Date.now()
+/**
+ * Strict Date-header parse: returns null (not now()) when the header is missing
+ * or unparseable. Used for the message timestamp everywhere — callers apply a
+ * `?? Date.now()` fallback for ordering/recency fields, while latency pairing
+ * uses the null directly so an unknown timestamp never fabricates a latency.
+ */
+function parseDateStrict(dateStr: string): number | null {
+  if (!dateStr) return null
   const ts = new Date(dateStr).getTime()
-  return isNaN(ts) ? Date.now() : ts
+  return isNaN(ts) ? null : ts
 }
 
 function formatDate(dateStr: string): string {

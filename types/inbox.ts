@@ -9,6 +9,11 @@ export interface Person {
   confidence:   number             // 0–100 confidence in the score
   relationship: RelationshipStatus
   twoWay:       boolean            // user sent to this person in at least one shared thread
+
+  // ── Directionality + reply latency (Memory V1.5, this-run values) ──
+  inboundCount:      number        // messages person→owner this run
+  outboundCount:     number        // messages owner→person this run
+  replyLatenciesSec: number[]      // inbound→outbound latencies paired this run (seconds)
 }
 
 export interface Topic {
