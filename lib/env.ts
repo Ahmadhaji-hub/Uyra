@@ -17,6 +17,9 @@ const SERVER_VARS = [
   'GOOGLE_CLIENT_SECRET',
   'NEXT_PUBLIC_SUPABASE_URL',
   'SUPABASE_SERVICE_ROLE_KEY',
+  // Shared secret protecting the Identity Memory cron endpoint
+  // (/api/cron/identity). Sent by Vercel Cron as `Authorization: Bearer <…>`.
+  'CRON_SECRET',
 ] as const
 
 // ── Required public variables (safe for browser) ─────────────────────────────
